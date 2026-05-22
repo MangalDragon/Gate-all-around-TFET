@@ -5,7 +5,12 @@
 # Drain  : InGaAs(n+, In0.53Ga0.47As)
 # Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
 #
-# Physics: BBT.NONLOCAL + TAT.NONLOCAL + BQP (Bohm) + Fermi-Dirac
+# Physics: BBT.NONLOCAL + TAT.NONLOCAL + Fermi-Dirac
+#          (BQP intentionally NOT combined with BBT.NONLOCAL on the same
+#           solve. ATLAS 2019 forces method=BLOCK for BQP, and the BLOCK
+#           iteration of BBT.NONLOCAL+BQP diverges. V_T calibration is
+#           handled via gate work-function instead.)
+#
 # Target : transfer (Id-Vg @ Vd=0.5) and output (Id-Vd @ Vg=0.5,1.0,1.5)
 #
 # Reference targets at Vd = 0.5 V, room T:
@@ -25,6 +30,9 @@ set Lds        = 0.020
 set doping_src = 5e19
 set doping_drn = 5e19
 set doping_ch  = 1e15
+# Gate WF: 4.35 eV is a good first guess for n-type TFET. To shift V_T,
+# raise this towards 4.5-4.6 eV (V_T moves up). Functionally equivalent
+# to a BQP confinement shift for transfer-curve work.
 set gate_wf    = 4.35
 set Ychar      = 0.003
 
@@ -47,10 +55,13 @@ X.MESH loc=0.009   spacing=0.0010
 # and across drain/channel junction (Y=0.040)
 Y.MESH loc=0.000   spacing=0.005
 Y.MESH loc=0.003   spacing=0.001
-Y.MESH loc=0.017   spacing=0.0005
-Y.MESH loc=0.0195  spacing=0.0001
-Y.MESH loc=0.020   spacing=0.0001     # source/channel tunnel junction
-Y.MESH loc=0.025   spacing=0.0010
+Y.MESH loc=0.015   spacing=0.0005
+Y.MESH loc=0.018   spacing=0.0002
+Y.MESH loc=0.0195  spacing=0.00005
+Y.MESH loc=0.020   spacing=0.00005    # source/channel tunnel junction (50 pm)
+Y.MESH loc=0.0205  spacing=0.00005
+Y.MESH loc=0.022   spacing=0.0002
+Y.MESH loc=0.025   spacing=0.0005
 Y.MESH loc=0.030   spacing=0.0010
 Y.MESH loc=0.035   spacing=0.0010
 Y.MESH loc=0.0395  spacing=0.0001
@@ -60,14 +71,23 @@ Y.MESH loc=0.057   spacing=0.001
 Y.MESH loc=0.060   spacing=0.005
 
 #-- Non-local BTBT/TAT mesh, ONLY at the source/channel tunnel junction ------
-# Limiting QTREGION to the source side avoids drain-side ambipolar BTBT
-# being captured into the same non-local mesh.
-QTX.MESH LOC=0.000 SPACING=0.001
-QTX.MESH LOC=0.005 SPACING=0.001
+# Wider window (10 nm above & 10 nm below junction) and finer spacing in
+# the tunneling direction to satisfy ATLAS BBT.NONLOCAL: previous run
+# emitted "QT mesh is not fine enough" warnings at 0.1 nm; we now use
+# 50 pm at the junction across a 5 nm window.
+QTX.MESH LOC=0.000  SPACING=0.0005
+QTX.MESH LOC=0.0025 SPACING=0.0005
+QTX.MESH LOC=0.005  SPACING=0.0005
 
-QTY.MESH LOC=0.015 SPACING=0.0005
-QTY.MESH LOC=0.020 SPACING=0.0001
-QTY.MESH LOC=0.025 SPACING=0.0005
+QTY.MESH LOC=0.010  SPACING=0.001
+QTY.MESH LOC=0.015  SPACING=0.0002
+QTY.MESH LOC=0.018  SPACING=0.0001
+QTY.MESH LOC=0.0195 SPACING=0.00005
+QTY.MESH LOC=0.020  SPACING=0.00005   # 50 pm at the junction
+QTY.MESH LOC=0.0205 SPACING=0.00005
+QTY.MESH LOC=0.022  SPACING=0.0001
+QTY.MESH LOC=0.025  SPACING=0.0002
+QTY.MESH LOC=0.030  SPACING=0.001
 
 #-----------------------------------------------------------------------------
 # 2. REGIONS
@@ -120,9 +140,6 @@ DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn \
 # 5. MATERIALS
 #    Reference: Vurgaftman 2001 (band parameters), Bahuguna 2017 / Avci 2015
 #    (tunneling masses), Mookerjea 2010 (broken-gap GaSb/InAs alignment).
-#    NOTE: bbt.a / bbt.b are LOCAL Kane parameters and are inert when
-#    BBT.NONLOCAL is selected. They are NOT included here on purpose.
-#    The non-local model uses me.tunnel / mh.tunnel + Eg + affinity.
 #-----------------------------------------------------------------------------
 material material=InAs              \
   permittivity=15.15                \
@@ -209,31 +226,26 @@ save outfile=gaa_iiiv_hj_tfet_eq_DD.str
 #     - BBT.NONLOCAL  : non-local interband tunneling on QTX/QTY mesh
 #     - BBT.NLDERIVS  : Jacobian terms of G_BTBT (essential for Newton)
 #     - TAT.NONLOCAL  : non-local trap-assisted tunneling
-#     - BQP.N / BQP.P : Bohm Quantum Potential -> sub-band shift in 5 nm wire
+#
+#     BQP intentionally NOT enabled here. In ATLAS 2019:
+#       (a) BQP forces method=BLOCK,
+#       (b) BBT.NONLOCAL inside a BLOCK iteration that also carries
+#           BQPn/BQPp unknowns diverges (residuals grow each step)
+#           and aborts with "Need to specify NEWTON or BLOCK method
+#           to use BBT.NONLOCAL model" - which is misleading; the real
+#           cause is the divergence.
+#     Workaround: anchor V_T via gate workfunc (the $gate_wf set var)
+#     instead of BQP gamma/alpha. Functionally equivalent for transfer-
+#     curve work; both shift V_T monotonically.
 #-----------------------------------------------------------------------------
 models                              \
   bbt.nonlocal bbt.nlderivs         \
   tat.nonlocal                      \
-  bqp.n bqp.p                       \
   fermi                             \
   srh auger                         \
   fldmob                            \
   temperature=300                   \
   print
-
-# BQP calibration:
-#   ATLAS 2019 does NOT expose alpha.n / alpha.p as material parameters
-#   (gamma.n is also ambiguous on the material card). Rather than risk a
-#   silent mis-binding, we leave BQP at its built-in defaults, which capture
-#   the qualitative sub-band shift in a 5 nm wire. To formally calibrate,
-#   you can either:
-#     (a) put bqp parameters on the MODELS card if your build supports it:
-#           models ... bqp.n bqp.p bqp.gamma=1.4 bqp.alpha=0.3
-#         (run a small test on one material first to confirm the keyword
-#          is accepted in your specific ATLAS 2019 patch level), or
-#     (b) keep defaults and instead fit gate workfunc / interface charge
-#         to your reference Vt, which is functionally equivalent for
-#         transfer-curve work.
 
 method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
 
