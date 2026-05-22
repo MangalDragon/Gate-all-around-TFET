@@ -1,77 +1,80 @@
 go atlas
 
 #-----------------------------------------------------------------------------
-# Diagnostic deck for the NEGF mode-space run
+# Diagnostic deck: verify the broken-gap band alignment in the saved
+# post-NEGF structure file.
 #
-# The previous run (gaa_iiiv_hj_tfet_negf.in) completed Stage A through
-# Stage C without aborting, but the Id-Vg curve sat at the 10^-21 A
-# numerical-noise floor with current oscillating symmetrically around
-# zero. That signature means NEGF mode-space produced essentially zero
-# transmission across the GaSb/InAs broken-gap junction.
+# Earlier version of this deck used `save outfile=... sec.x=0.001` to
+# write a 1D axial cutline structure for tonyplot. That syntax is meant
+# for the in-flight solver and does not work cleanly after a structure
+# is reloaded via `mesh infile=`, so the deck errored. This version uses
+# `probe` statements instead. probe samples a named field quantity at
+# explicit (x,y) coordinates and prints the result to the ATLAS console
+# whenever a solve is issued, which is exactly the read-only behaviour
+# we want for a diagnostic.
 #
-# Likely cause: ATLAS effective-mass NEGF_MS builds the Hamiltonian from
-# the conduction-band effective masses on a per-slice basis. There is no
-# off-diagonal matrix element coupling the GaSb valence band to the
-# InAs conduction band, so the Green's function returns T(E) ~= 0 across
-# the Type-III junction. This is a model limitation, not a parameter
-# tuning problem, and is exactly the case study where Carrillo-Nunez
-# 2017 (arXiv:1705.00909) had to use atomistic tight-binding NEGF
-# instead of effective-mass NEGF.
-#
-# Before deciding whether to (a) fall back to the local-Hurkx baseline,
-# (b) apply a Type-II band-shift kludge so NEGF has a real barrier to
-# tunnel through, or (c) move to Victory Atomistic / Nemo5, we want to
-# verify the band alignment ATLAS actually built. This deck does that:
-#
-#   1. Load the saved post-NEGF structure file.
-#   2. Save axial and radial cutlines as separate 1D structures.
-#   3. Hand them to tonyplot so we can visually confirm that
-#         E_V(GaSb)  >  E_C(InAs)
-#      at the source/channel junction, which is the broken-gap
-#      condition we expect for chi(GaSb) = 4.06 eV.
+# `solve prev` after `mesh infile=` re-evaluates the already-loaded
+# bias point without modifying any potential or carrier distribution.
+# It exists here only to flush the probe values to the console.
 #-----------------------------------------------------------------------------
 
-# Load the structure produced at the end of Stage B.
 mesh infile=gaa_iiiv_hj_tfet_negf_btbt_vd05.str
 
-# Re-state material parameters so any subsequent band query uses the
-# same affinity / Eg / Nc / Nv that the NEGF run used. mesh infile only
-# loads the geometry and node-by-node solution; material cards are
-# defaults until we issue them again.
 material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19
 material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18
 material material=InGaAs permittivity=13.90 eg300=0.74  affinity=4.50 nc300=2.1e17 nv300=7.7e18
 material material=HfO2   permittivity=22.0  eg300=5.7   affinity=2.05
 
-# Make sure the band fields are written into the cutline structures.
 output con.band val.band qfn qfp e.field
 
 #-----------------------------------------------------------------------------
-# Axial cutline at x = 0.001 um (1 nm from the cylinder axis, well
-# inside the semiconductor core). y runs the full device length, so
-# this slice goes Source(GaSb) -> Channel(InAs) -> Drain(InGaAs) and
-# crosses both heterojunctions at y = 0.020 and y = 0.040.
+# Probe points along the axial cutline at x = 0.001 um (1 nm from the
+# cylinder axis, well inside the semiconductor core). Values are printed
+# to the ATLAS console when `solve prev` runs below.
 #
-# In tonyplot, plot CON.BAND and VAL.BAND vs y. If the run is doing
-# real broken-gap physics we expect:
-#     y < 0.020  : E_V(GaSb)  ~  -4.79 eV (top of GaSb VB),
-#                  E_C(GaSb)  ~  -4.06 eV
-#     y > 0.020  : E_C(InAs)  ~  -4.90 eV
-# so E_V(GaSb) sits ~110 meV ABOVE E_C(InAs) at the junction.
+# Expected values (flat-band, vacuum reference, E = -chi for E_C and
+# E = -chi - E_g for E_V):
+#   EC_GaSb       = -4.060 eV
+#   EV_GaSb       = -4.786 eV
+#   EV_GaSb_junc  = -4.786 eV   (just inside GaSb at the junction)
+#   EC_InAs_junc  = -4.900 eV   (just inside InAs at the junction)
+#   EC_InAs       = -4.900 eV
+#   EV_InAs       = -5.254 eV
+#   EC_InGaAs     = -4.500 eV
+#
+# Broken-gap is confirmed when EV_GaSb_junc > EC_InAs_junc, i.e. the
+# GaSb valence band sits ABOVE the InAs conduction band by ~114 meV.
+# Doping-induced band-bending will shift these values by a few hundred
+# meV relative to the flat-band reference, but the relative ordering at
+# the junction (VB(GaSb) above CB(InAs)) is what defines Type-III.
 #-----------------------------------------------------------------------------
-save outfile=gaa_iiiv_hj_tfet_negf_axial.str sec.x=0.001
+probe name=EC_GaSb       x=0.001 y=0.010 con.band
+probe name=EV_GaSb       x=0.001 y=0.010 val.band
+probe name=EV_GaSb_junc  x=0.001 y=0.019 val.band
+probe name=EC_InAs_junc  x=0.001 y=0.021 con.band
+probe name=EC_InAs       x=0.001 y=0.030 con.band
+probe name=EV_InAs       x=0.001 y=0.030 val.band
+probe name=EC_InGaAs     x=0.001 y=0.050 con.band
+
+# Minimal models / method block. solve prev needs a method definition
+# even when no actual stepping is requested. Fermi statistics keeps the
+# carrier model consistent with the original NEGF run; classical Newton
+# is sufficient because we are not stepping bias.
+models fermi temperature=300
+method newton
+
+# Re-evaluate at the loaded bias and flush probe values.
+solve prev
 
 #-----------------------------------------------------------------------------
-# Radial cutline at y = 0.030 um (mid-channel). x runs from the cylinder
-# axis through the InAs core, the HfO2 gate dielectric, and out into the
-# air. Useful for confirming the gate stack and verifying that the
-# Schrodinger sub-band confinement is happening over the full 5 nm
-# radius.
+# Visual confirmation in tonyplot (optional, gives the full band
+# diagram instead of seven point samples):
+#   1. tonyplot gaa_iiiv_hj_tfet_negf_btbt_vd05.str
+#   2. Plot menu -> Cutline -> Direction=Y, X position=0.001 -> Apply
+#   3. Add CON.BAND and VAL.BAND to the plot
+#   4. Look for the step at y=0.020 where EC(InAs) drops ~114 meV
+#      below EV(GaSb). That is the broken-gap overlap.
 #-----------------------------------------------------------------------------
-save outfile=gaa_iiiv_hj_tfet_negf_radial.str sec.y=0.030
-
-# View both cutlines.
-tonyplot gaa_iiiv_hj_tfet_negf_axial.str
-tonyplot gaa_iiiv_hj_tfet_negf_radial.str
+tonyplot gaa_iiiv_hj_tfet_negf_btbt_vd05.str
 
 quit
