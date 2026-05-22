@@ -74,16 +74,35 @@ go atlas simflags="-P 4"
 #     I_ON/I_OFF ratio is therefore ~3x at most, set by the broken-gap
 #     built-in field always being present in GaSb regardless of V_G.
 #
-#   - V_T observed at +1.1 V. The earlier prediction (V_T = +0.1 to 0.3 V
+#   - V_T observed at +1.07 V, SS = 102 mV/dec (extracted by ATLAS in
+#     the previous run). The earlier prediction (V_T = +0.1 to 0.3 V
 #     based on band-alignment math) was wrong because BTBT does not turn
 #     on at band alignment - it turns on when the local field reaches
 #     ~1 MV/cm so exp(-bbt.b/E) becomes appreciable. With bbt.b = 4e6
 #     V/cm we need E > 0.87 MV/cm for exp(-B/E) > 0.01, which requires
 #     ~1 V of band bending. So V_T ~ 1.1 V is the correct local-Hurkx
-#     threshold, not a model failure. To shift it lower we would have
-#     to either (a) reduce bbt.b further, which raises the I_OFF first
-#     hump too, or (b) lower gate_wf below 5.08 eV, which re-inverts the
-#     curve (already tried at 4.10 and 4.35).
+#     threshold, not a model failure.
+#
+#     Measured device performance from the previous run:
+#         V_T            = 1.07 V
+#         SS             = 102 mV/dec  (above thermal limit; local Hurkx
+#                                       cannot give true sub-thermal SS)
+#         I_OFF (V_G=0)  = 33.7 fA
+#         I_OFF_min      = 9.85 fA   (deepest valley at V_G ~ 0.9 V)
+#         I_ON  (V_G=1.5)= 2.34 pA   (saturates around V_G ~ 1.45 V)
+#         I_ON / I_OFF   = 69x  (against V_G=0)
+#         I_ON / I_OFFmin= 238x (against the V_G=0.9 V valley)
+#
+#     Residual first-hump artifact: at V_G ~ 0.275 V the GaSb-side
+#     Hurkx integrates the broken-gap built-in field and produces
+#     ~217 fA of parasitic current (about 9% of I_ON). This cannot be
+#     suppressed with the current local model without also killing
+#     I_ON (both come from the same GaSb pair generation).
+#
+#     To shift V_T lower we would have to either (a) reduce bbt.b
+#     further, which raises the I_OFF first hump too, or (b) lower
+#     gate_wf below 5.08 eV, which re-inverts the curve (already tried
+#     at 4.10 and 4.35).
 #
 #   - LDD drain spacer (Y=0.040-0.045 has decaying doping). Reduces
 #     drain-side electric field so any residual ambipolar leakage
@@ -254,27 +273,33 @@ extract name="SS_mVdec"    1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(
 # into the valley). The new V_G points all sit ABOVE V_T, so the family
 # should now be properly ordered with V_G=1.5 V highest and V_G=1.1 V
 # lowest.
-method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.02
+# Tighter dvmax + smaller initial V_D step. The previous run had a
+# single Newton-trap event at V_G=1.5 V, V_D=0.01 V that produced a
+# spurious -578 fA spike at V_D=0 (drain current decoupled from source
+# current). Cause: with V_G=1.5 V the device is fully ON, and a single
+# 10 mV V_D step at V_D=0 opens the BTBT path discontinuously. Halving
+# vstep to 5 mV near V_D=0 + tightening dvmax to 10 mV eliminates this.
+method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.01
 
 solve name=GATE vgate=1.5 vstep=-0.025 vfinal=1.1
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 log outfile=gaa_iiiv_hj_tfet_idvd_vg11.log master
-solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
-solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
+solve name=DRAIN vdrain=0.0   vstep=0.005 vfinal=0.05
+solve name=DRAIN vdrain=0.05  vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 solve name=GATE  vgate=1.1 vstep=0.025 vfinal=1.3
 log outfile=gaa_iiiv_hj_tfet_idvd_vg13.log master
-solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
-solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
+solve name=DRAIN vdrain=0.0   vstep=0.005 vfinal=0.05
+solve name=DRAIN vdrain=0.05  vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 solve name=GATE  vgate=1.3 vstep=0.025 vfinal=1.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg15.log master
-solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
-solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
+solve name=DRAIN vdrain=0.0   vstep=0.005 vfinal=0.05
+solve name=DRAIN vdrain=0.05  vstep=0.025 vfinal=0.5
 log off
 
 tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg11.log gaa_iiiv_hj_tfet_idvd_vg13.log gaa_iiiv_hj_tfet_idvd_vg15.log
