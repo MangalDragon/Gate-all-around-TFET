@@ -221,13 +221,19 @@ models                              \
   temperature=300                   \
   print
 
-# BQP calibration constants (Silvaco BQP note: gamma=1.4, alpha=0.3 fits Si
-# Schroedinger-Poisson; for InAs nanowire similar values reproduce the
-# 1st sub-band shift to within ~20 meV. Treat as a fit knob if you have
-# atomistic reference data.)
-material material=InAs   gamma.n=1.4  alpha.n=0.3  gamma.p=1.4  alpha.p=0.3
-material material=GaSb   gamma.n=1.4  alpha.n=0.3  gamma.p=1.4  alpha.p=0.3
-material material=InGaAs gamma.n=1.4  alpha.n=0.3  gamma.p=1.4  alpha.p=0.3
+# BQP calibration:
+#   ATLAS 2019 does NOT expose alpha.n / alpha.p as material parameters
+#   (gamma.n is also ambiguous on the material card). Rather than risk a
+#   silent mis-binding, we leave BQP at its built-in defaults, which capture
+#   the qualitative sub-band shift in a 5 nm wire. To formally calibrate,
+#   you can either:
+#     (a) put bqp parameters on the MODELS card if your build supports it:
+#           models ... bqp.n bqp.p bqp.gamma=1.4 bqp.alpha=0.3
+#         (run a small test on one material first to confirm the keyword
+#          is accepted in your specific ATLAS 2019 patch level), or
+#     (b) keep defaults and instead fit gate workfunc / interface charge
+#         to your reference Vt, which is functionally equivalent for
+#         transfer-curve work.
 
 method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
 
