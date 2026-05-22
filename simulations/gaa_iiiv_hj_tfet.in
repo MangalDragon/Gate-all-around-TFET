@@ -220,9 +220,12 @@ tonyplot -st gaa_iiiv_hj_tfet_idvg.log -set log10y
 
 # Extract V_T (max-slope x-intercept) and SS (1/max-slope of log10|Id|).
 # These print to the deckbuild console in the run output.
+# Note: maxslope() returns a tangent-LINE object, not a number. xintercept()
+# accepts a line directly, but arithmetic operations need the numeric slope,
+# which slope(maxslope(...)) returns.
 extract init infile="gaa_iiiv_hj_tfet_idvg.log"
-extract name="V_T_n_TFET"   xintercept(maxslope(curve(v."gate", abs(i."drain"))))
-extract name="SS_mVdec"     1000.0 / maxslope(curve(v."gate", log10(abs(i."drain"))))
+extract name="V_T_n_TFET"  xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+extract name="SS_mVdec"    1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
 
 # ===== STAGE D: output family Id-Vd at V_GS = 0.7, 0.95, 1.2 V =====
 # These three V_G values bracket the n-TFET ON-region peak observed in
