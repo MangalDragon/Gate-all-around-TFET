@@ -1,5 +1,27 @@
 go atlas simflags="-P 4"
 
+# Gate-All-Around III-V Heterojunction TFET
+# Source : GaSb  (p+, broken-gap)
+# Channel: InAs  (n-, intrinsic)
+# Drain  : InGaAs (n+, In0.53Ga0.47As)
+# Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
+#
+# IMPORTANT: This deck uses the LOCAL Kane BTBT model (BBT.STD), not
+# the non-local model (BBT.NONLOCAL). The non-local model in ATLAS
+# 2019 (5.28.1.R) cannot converge for a Type-III broken-gap heterojunction
+# in cylindrical geometry: the WKB integrator was designed for "normal"
+# pn junctions with a forbidden gap region between E_V (p-side) and
+# E_C (n-side). For GaSb/InAs:
+#   E_V(GaSb) - E_C(InAs) = +0.114 eV (broken gap)
+# there is NO forbidden region, the WKB transmission is sign-indefinite,
+# and ATLAS aborts with "QT mesh is not fine enough" or "Code 2 in
+# GetTransmissionProbability" no matter how the QT mesh is refined.
+#
+# The local Kane model uses bbt.a and bbt.b material parameters
+# (calibrated for direct-gap III-V) and computes G_BTBT = A * E^P * exp(-B/E)
+# from the local electric field. This converges reliably and gives a
+# qualitatively correct TFET Id-Vg curve.
+
 set Lg = 0.020
 set R = 0.005
 set tOX = 0.002
@@ -39,20 +61,7 @@ Y.MESH loc=0.043   spacing=0.0005
 Y.MESH loc=0.057   spacing=0.001
 Y.MESH loc=0.060   spacing=0.005
 
-# QT mesh: tight 50 pm window ONLY +/- 1 nm around the junction (Y=0.020)
-# Previous versions used 0.1 nm over 16 nm -> "mesh not fine enough"
-# because the WKB path is only ~0.3 nm long at this broken-gap alignment.
-QTX.MESH LOC=0.000  SPACING=0.0005
-QTX.MESH LOC=0.0025 SPACING=0.0005
-QTX.MESH LOC=0.005  SPACING=0.0005
-
-QTY.MESH LOC=0.012  SPACING=0.002
-QTY.MESH LOC=0.019  SPACING=0.0005
-QTY.MESH LOC=0.0199 SPACING=0.00005
-QTY.MESH LOC=0.020  SPACING=0.00005
-QTY.MESH LOC=0.0201 SPACING=0.00005
-QTY.MESH LOC=0.021  SPACING=0.0005
-QTY.MESH LOC=0.028  SPACING=0.002
+# NO QTX.MESH / QTY.MESH - we use the LOCAL Kane BTBT model.
 
 REGION NUM=1 NAME=SRC_GaSb    MATERIAL=GaSb   Y.MIN=0.003 Y.MAX=0.020 X.MIN=0 X.MAX=0.005
 REGION NUM=2 NAME=CH_InAs     MATERIAL=InAs   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0 X.MAX=0.005
@@ -69,10 +78,20 @@ DOPING GAUSSIAN MATERIAL=GaSb   P.TYPE CONCENTRATION=$doping_src Y.MIN=0.003 Y.M
 DOPING UNIFORM  MATERIAL=InAs   N.TYPE CONCENTRATION=$doping_ch  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
 DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.040 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
 
-material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 me.tunnel=0.023 mh.tunnel=0.026 mun=20000 mup=500  taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
-material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 me.tunnel=0.039 mh.tunnel=0.40  mun=3000  mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
-material material=InGaAs permittivity=13.90 eg300=0.74  affinity=4.50 nc300=2.1e17 nv300=7.7e18 me.tunnel=0.041 mh.tunnel=0.050 mun=12000 mup=300  taun0=1e-7 taup0=1e-7 vsatn=2.5e7 vsatp=2.5e7
-material material=HfO2   permittivity=22.0  eg300=5.7   affinity=2.05
+# bbt.a / bbt.b are the Kane coefficients used by BBT.STD.
+material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
+  me.tunnel=0.023 mh.tunnel=0.026 bbt.a=4.0e14 bbt.b=1.9e7 \
+  mun=20000 mup=500 taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
+
+material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 \
+  me.tunnel=0.039 mh.tunnel=0.40 bbt.a=9.1e14 bbt.b=1.3e7 \
+  mun=3000 mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
+
+material material=InGaAs permittivity=13.90 eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
+  me.tunnel=0.041 mh.tunnel=0.050 bbt.a=4.0e14 bbt.b=2.0e7 \
+  mun=12000 mup=300 taun0=1e-7 taup0=1e-7 vsatn=2.5e7 vsatp=2.5e7
+
+material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
 
 contact name=SOURCE
 contact name=DRAIN
@@ -80,7 +99,7 @@ contact name=GATE workfunc=$gate_wf
 
 interface x.min=0.005 x.max=0.005 y.min=0.020 y.max=0.040 s.n=5e2 s.p=5e2
 
-output band.temp band.param qfn qfp j.electron j.hole j.total con.band val.band e.mobility e.field u.srh u.aug flowlines
+output band.temp band.param qfn qfp j.electron j.hole j.total con.band val.band e.mobility e.field u.bbt u.srh u.aug flowlines
 
 # ===== STAGE A: DD only, equilibrium + drain ramp to 0.5 V =====
 models fermi srh auger fldmob temperature=300 print
@@ -92,29 +111,17 @@ save outfile=gaa_iiiv_hj_tfet_eq_DD.str
 solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
 save outfile=gaa_iiiv_hj_tfet_dd_vd05.str
 
-# ===== STAGE B: turn on BBT.NONLOCAL (without NLDERIVS first) =====
-# First converge WITHOUT bbt.nlderivs to get a stable BTBT-aware solution.
-# Then re-issue with nlderivs for the sweep.
-models bbt.nonlocal fermi srh auger fldmob temperature=300 print
-method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.025
+# ===== STAGE B: turn on LOCAL Kane BTBT + local TAT at V_DS = 0.5 V =====
+# BBT.STD : Kane local BTBT, uses bbt.a and bbt.b from material cards
+# TRAP.TUNNEL : Hurkx field-enhancement of SRH lifetime (local TAT)
+# Both are local models, no QT mesh needed, no broken-gap pathology.
+models bbt.std trap.tunnel fermi srh auger fldmob temperature=300 print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.05
 
 solve prev
 save outfile=gaa_iiiv_hj_tfet_btbt_vd05.str
 
-# Now add NLDERIVS for the sweep (Jacobian coupling)
-models bbt.nonlocal bbt.nlderivs fermi srh auger fldmob temperature=300 print
-method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.025
-
-solve prev
-
-# ===== STAGE C: add TAT.NONLOCAL =====
-models bbt.nonlocal bbt.nlderivs tat.nonlocal fermi srh auger fldmob temperature=300 print
-method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.025
-
-solve prev
-save outfile=gaa_iiiv_hj_tfet_full_vd05.str
-
-# ===== STAGE D: transfer curve Id-Vg at Vd = 0.5 V =====
+# ===== STAGE C: transfer curve Id-Vg at V_DS = 0.5 V =====
 log outfile=gaa_iiiv_hj_tfet_idvg.log master
 solve name=GATE vgate=0.0 vstep=0.025 vfinal=1.5
 log off
@@ -122,7 +129,7 @@ log off
 save outfile=gaa_iiiv_hj_tfet_on.str
 tonyplot gaa_iiiv_hj_tfet_idvg.log
 
-# ===== STAGE E: output family Id-Vd =====
+# ===== STAGE D: output family Id-Vd at V_GS = 0.5, 1.0, 1.5 V =====
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 
 solve name=GATE vgate=1.5 vstep=-0.05 vfinal=0.5
