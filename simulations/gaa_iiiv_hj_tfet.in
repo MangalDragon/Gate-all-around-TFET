@@ -5,10 +5,32 @@
 # Drain  : InGaAs(n+, In0.53Ga0.47As)
 # Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
 #
-# Physics: BBT.NONLOCAL (always on) + TAT.NONLOCAL (turned on AFTER the
-#          operating point is established, to avoid the WKB integrator
-#          choking at the zero-bias broken-gap equilibrium)
-# Target : transfer (Id-Vg @ Vd=0.5) and output (Id-Vd @ Vg=0.5,1.0,1.5)
+# Solve order (this is the entire trick for broken-gap TFETs):
+#
+#   Stage A  -  DD only, equilibrium and drain ramp to V_DS = 0.5 V.
+#               BTBT models OFF here. DD is unconditionally well-
+#               conditioned at any bias.
+#   Stage B  -  Turn ON BBT.NONLOCAL at V_DS = 0.5 V. The bands are
+#               tilted by V_bi + V_DS ~= 0.79 V; BTBT direction is
+#               unambiguous and Newton sees BTBT as a small perturbation
+#               on the DD solution.
+#   Stage C  -  Turn ON TAT.NONLOCAL on top of B. The carrier
+#               distribution is already settled, so the non-local
+#               TAT WKB integrator has a sensible WKB path.
+#   Stage D  -  Gate sweep 0 -> 1.5 V at fixed V_DS = 0.5 V (transfer).
+#   Stage E  -  Output family at V_GS = {0.5, 1.0, 1.5} V.
+#
+# Why we never solve a BTBT-aware equilibrium at V_DS = 0:
+#   E_V(GaSb) = -chi - Eg = -4.786 eV
+#   E_C(InAs) = -chi      = -4.900 eV
+#   E_V(GaSb) - E_C(InAs) = +0.114 eV  (Type-III, broken gap)
+# The barrier height between source VB and channel CB is NEGATIVE at
+# zero bias, the WKB integrator returns sign-indefinite values
+# ("Code 2 in GetTransmissionProbability"), and Newton diverges from
+# any DD-only initial guess. A built-in V_bi ~= 0.286 V also already
+# tilts the bands. Solving with BBT.NONLOCAL active at V_DS = 0 V is
+# therefore the hardest point in the entire I-V sweep, and it is also
+# the one point we don't need to log.
 #
 # Reference targets at Vd = 0.5 V, room T:
 #   Ion ~ 100 - 800 uA/um (effective perimeter)
@@ -69,10 +91,7 @@ Y.MESH loc=0.060   spacing=0.005
 
 #-- Non-local BTBT/TAT mesh, ONLY at the source/channel tunnel junction ------
 # Width: ~16 nm window centred on the junction.
-# Spacing: 0.1 nm at the junction. The previous 50 pm version produced
-# many stray "Code 2" WKB warnings because the integrator
-# over-discretized; 0.1 nm with 0.2 nm transitions matches Silvaco's
-# own GAA TFET examples.
+# Spacing: 0.1 nm at the junction.
 QTX.MESH LOC=0.000  SPACING=0.0005
 QTX.MESH LOC=0.0025 SPACING=0.0005
 QTX.MESH LOC=0.005  SPACING=0.0005
@@ -134,13 +153,6 @@ DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn \
 # 5. MATERIALS
 #    Reference: Vurgaftman 2001 (band parameters), Bahuguna 2017 / Avci 2015
 #    (tunneling masses), Mookerjea 2010 (broken-gap GaSb/InAs alignment).
-#
-#    NOTE on lifetimes: taun0/taup0 are intentionally LONG (1e-7 s)
-#    rather than the original 1e-9 s. The shorter value makes the
-#    zero-bias broken-gap equilibrium very stiff (BTBT generation must
-#    be balanced by very fast SRH recombination) and was the immediate
-#    cause of the Newton failure in the previous run. 1e-7 s is a
-#    typical InAs/GaSb minority-carrier lifetime in the literature.
 #-----------------------------------------------------------------------------
 material material=InAs              \
   permittivity=15.15                \
@@ -181,25 +193,10 @@ contact name=GATE workfunc=$gate_wf
 
 #-----------------------------------------------------------------------------
 # 7. INTERFACE TRAPS (HfO2 / InAs)
-#    Surface recombination + finite Dit-equivalent surface velocity drives
-#    the realistic SS-floor through TAT.NONLOCAL once it's enabled below.
 #-----------------------------------------------------------------------------
 interface x.min=0.005 x.max=0.005 \
           y.min=0.020 y.max=0.040 \
           s.n=5e2 s.p=5e2
-
-#-----------------------------------------------------------------------------
-# 8. STAGE A: equilibrium-friendly model set (no tunneling generation yet)
-#-----------------------------------------------------------------------------
-models                              \
-  fermi                             \
-  srh auger                         \
-  fldmob                            \
-  temperature=300                   \
-  print
-
-method gummel newton autonr trap maxtrap=10 \
-       itlimit=50 climit=1e-5 dvmax=0.5
 
 #-- output what we want to inspect later -------------------------------------
 output band.temp band.param  \
@@ -210,25 +207,37 @@ output band.temp band.param  \
   u.bbt u.srh u.aug          \
   flowlines
 
+#=============================================================================
+# STAGE A : DD only - equilibrium AND drain ramp to V_DS = 0.5 V
+#           (BTBT/TAT models DELIBERATELY OFF here)
+#=============================================================================
+models                              \
+  fermi                             \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+
+method gummel newton autonr trap maxtrap=10 \
+       itlimit=50 climit=1e-5 dvmax=0.5
+
 solve init
 save outfile=gaa_iiiv_hj_tfet_eq_DD.str
 
-#-----------------------------------------------------------------------------
-# 9. STAGE B: turn on BBT.NONLOCAL only (TAT.NONLOCAL deferred)
+# DD drain ramp from 0 to 0.5 V. DD is unconditionally robust at any bias.
+solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
+save outfile=gaa_iiiv_hj_tfet_op_dd_vd05.str
+
+#=============================================================================
+# STAGE B : turn ON BBT.NONLOCAL at V_DS = 0.5 V
 #
-#    The previous run aborted because Newton could not find a zero-bias
-#    equilibrium that includes the broken-gap GaSb -> InAs interband
-#    tunnel current AND the non-local trap-assisted tunnel current.
-#    The fix is two-fold:
-#      (a) Do NOT re-solve equilibrium with BTBT on. Skip "solve prev".
-#          Instead apply a tiny drain bias (1 mV) which breaks the
-#          broken-gap symmetry and gives Newton a finite, well-defined
-#          operating point to converge on.
-#      (b) Keep TAT.NONLOCAL OFF during the initial drain ramp - the
-#          "Code 2 in GetTransmissionProbability" warnings come from
-#          its WKB integrator running into invalid energy ranges at
-#          near-zero bias.
-#-----------------------------------------------------------------------------
+#   - method must be NEWTON, NOT gummel newton: BBT.NONLOCAL refuses the
+#     Gummel iteration ("Need to specify NEWTON or BLOCK method to use
+#     BBT.NONLOCAL model").
+#   - solve prev re-converges at V_DS = 0.5 V with the BTBT generation
+#     term added. This is small (off-state) and Newton converges in a few
+#     iterations because the bands are clearly tilted (V_bi + V_DS ~ 0.79 V).
+#=============================================================================
 models                              \
   bbt.nonlocal bbt.nlderivs         \
   fermi                             \
@@ -237,24 +246,15 @@ models                              \
   temperature=300                   \
   print
 
-method gummel newton autonr trap maxtrap=30 \
+method newton autonr trap maxtrap=30 \
        itlimit=100 climit=1e-5 dvmax=0.05
 
-#-----------------------------------------------------------------------------
-# 10. DRAIN RAMP - very small first step to break broken-gap equilibrium
-#-----------------------------------------------------------------------------
-solve name=DRAIN vdrain=0.001
-solve name=DRAIN vdrain=0.001 vstep=0.002 vfinal=0.01
-solve name=DRAIN vstep=0.01 vfinal=0.05
-solve name=DRAIN vstep=0.05 vfinal=0.50
+solve prev
+save outfile=gaa_iiiv_hj_tfet_op_btbt_vd05.str
 
-save outfile=gaa_iiiv_hj_tfet_op_vd05.str
-
-#-----------------------------------------------------------------------------
-# 11. STAGE C: now turn on TAT.NONLOCAL on top of the established
-#     operating point. Carrier distributions are well-defined here so
-#     the non-local TAT integrator has a sensible WKB path to follow.
-#-----------------------------------------------------------------------------
+#=============================================================================
+# STAGE C : turn ON TAT.NONLOCAL on top of BTBT at V_DS = 0.5 V
+#=============================================================================
 models                              \
   bbt.nonlocal bbt.nlderivs         \
   tat.nonlocal                      \
@@ -268,42 +268,45 @@ method newton autonr trap maxtrap=30 \
        itlimit=100 climit=1e-5 dvmax=0.05
 
 solve prev
-save outfile=gaa_iiiv_hj_tfet_op_full.str
+save outfile=gaa_iiiv_hj_tfet_op_full_vd05.str
 
-#-----------------------------------------------------------------------------
-# 12. TRANSFER CURVE: Id-Vg at Vd = 0.5 V (full physics)
-#-----------------------------------------------------------------------------
+#=============================================================================
+# STAGE D : transfer curve - Id-Vg at V_DS = 0.5 V
+#=============================================================================
 log outfile=gaa_iiiv_hj_tfet_idvg.log master
-solve name=GATE  vgate=0.0  vstep=0.025 vfinal=1.5
+solve name=GATE vgate=0.0 vstep=0.025 vfinal=1.5
 log off
 
 save outfile=gaa_iiiv_hj_tfet_on.str
 tonyplot gaa_iiiv_hj_tfet_idvg.log
 
-#-----------------------------------------------------------------------------
-# 13. OUTPUT FAMILY: Id-Vd at Vg = 0.5, 1.0, 1.5 V
-#     We DON'T go via "solve init" again (which would lose the BTBT
-#     models); instead we walk gate down/up to each target VGS while
-#     keeping VD pinned, then sweep VD.
-#-----------------------------------------------------------------------------
-# zero out drain
-solve name=DRAIN vdrain=0.0
+#=============================================================================
+# STAGE E : output family - Id-Vd at V_GS = 0.5, 1.0, 1.5 V
+#
+# We are at V_DS = 0.5, V_GS = 1.5 V at this point. Walk drain DOWN
+# in small steps before each Id-Vd sweep so Newton never sees a 0.5 V
+# step in any single solve.
+#=============================================================================
+solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 
-# --- Vg = 0.5 V ------------------------------------------------------------
+# --- V_GS = 0.5 V ----------------------------------------------------------
 solve name=GATE  vgate=1.5 vstep=-0.05 vfinal=0.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg05.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
 log off
 
-# --- Vg = 1.0 V ------------------------------------------------------------
-solve name=DRAIN vdrain=0.0
+# walk drain back to 0
+solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
+
+# --- V_GS = 1.0 V ----------------------------------------------------------
 solve name=GATE  vgate=0.5 vstep=0.05 vfinal=1.0
 log outfile=gaa_iiiv_hj_tfet_idvd_vg10.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
 log off
 
-# --- Vg = 1.5 V ------------------------------------------------------------
-solve name=DRAIN vdrain=0.0
+solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
+
+# --- V_GS = 1.5 V ----------------------------------------------------------
 solve name=GATE  vgate=1.0 vstep=0.05 vfinal=1.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg15.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
