@@ -1,86 +1,41 @@
 go atlas
 
 #-----------------------------------------------------------------------------
-# Diagnostic deck for the NEGF mode-space run - revision 3
+# Diagnostic deck for the NEGF mode-space run - revision 4 (minimal)
 #
-# Findings from the previous diagnostic attempt:
+# Rev 3 errored on load with:
+#     Error: No mesh lines specified in the X direction.
+# right after the standalone `mesh cylindrical` line. Diagnosis: ATLAS
+# parses `mesh cylindrical` as the start of a new mesh declaration, not
+# as a flag-toggle on the already-loaded mesh, and then demands
+# X.MESH/Y.MESH lines that never come.
 #
-#   1. The structure file gaa_iiiv_hj_tfet_negf_btbt_vd05.str loaded
-#      cleanly but ATLAS printed:
-#         "Warning: No solution present. Performing zero carrier, zero
-#          bias calculation for initial guess."
-#      and `solve prev` fell back to a fresh init at V_DRAIN = 0 V.
-#      The .str therefore contains geometry + electrode bias metadata
-#      + band edges (from material parameters) but NO carrier solution
-#      and NO self-consistent Poisson potential. This is a second
-#      independent indicator that NEGF Stage B never produced a real
-#      physical solution: with carriers=0 the DD n/p arrays are not
-#      populated by the DD continuity equations, and if NEGF itself
-#      returns zero transmission those internal arrays remain at
-#      round-off. `save outfile=...` then writes a structure with
-#      effectively empty solution fields.
+# Fix: drop that line. The non-cylindrical interpretation does not
+# matter for pointwise band probes (con.band / val.band at a coordinate
+# is the same scalar in either coordinate system).
 #
-#   2. The mesh lost its cylindrical flag in the .str roundtrip
-#      ("Type: non-cylindrical" reported on load). For pointwise band
-#      probes this does not matter, but is worth restoring for any
-#      derived quantity that depends on volumes (densities, currents).
+# This revision also strips every other line that could plausibly be
+# the failure source, so this deck is the smallest possible probe-and-
+# print: load, declare materials, define probes, open log, solve init,
+# close log, plot. Anything else that errored in rev 3 is no longer in
+# the deck to error.
 #
-#   3. The seven `probe` statements declared no output destination.
-#      probe writes its named samples to the master log. Without
-#      `log outfile=... master` before solve runs, the probe data has
-#      nowhere to land and no values appear in the console.
-#
-# This revision fixes (2) and (3). It accepts (1): solve init below
-# computes a fresh equilibrium at V = 0 instead of restoring the
-# post-NEGF state, which is fine for verifying band alignment because
-# alignment is determined by the affinities and bandgaps, not the
-# applied bias.
+# Things removed vs rev 3:
+#   - `mesh cylindrical`        (the actual error in rev 3)
+#   - `output con.band ...`     (loaded .str already has output settings)
+#   - `master` qualifier on log (bare `log outfile=` is universal)
+#   - `models fermi temperature=300`
+#   - `method newton`
+# (solve init takes whatever statistics the loaded structure had.)
 #-----------------------------------------------------------------------------
 
 mesh infile=gaa_iiiv_hj_tfet_negf_btbt_vd05.str
 
-# Restore cylindrical interpretation - the flag is not preserved across
-# save / load. Without this the mesh is treated as planar.
-mesh cylindrical
-
-# Re-state material parameters so any subsequent band query uses the
-# same affinity / Eg / Nc / Nv that the NEGF run used.
 material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19
 material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18
 material material=InGaAs permittivity=13.90 eg300=0.74  affinity=4.50 nc300=2.1e17 nv300=7.7e18
 material material=HfO2   permittivity=22.0  eg300=5.7   affinity=2.05
 
-output con.band val.band qfn qfp e.field
-
-#-----------------------------------------------------------------------------
-# Probe points along the axial cutline at x = 0.001 um.
-# Values land in the master log when solve runs below.
-#
-# Expected (flat-band, vacuum reference):
-#   EC_GaSb       = -4.06   eV  (deep in source, far from junction)
-#   EV_GaSb       = -4.786  eV
-#   EV_GaSb_junc  = -4.786  eV  (just inside GaSb at junction, y=0.019)
-#   EC_InAs_junc  = -4.90   eV  (just inside InAs at junction, y=0.021)
-#   EC_InAs       = -4.90   eV  (mid-channel)
-#   EV_InAs       = -5.254  eV
-#   EC_InGaAs     = -4.50   eV  (drain body)
-#
-# The numerical answer in the log will be SHIFTED uniformly because
-# ATLAS uses an internal energy reference (typically the source
-# contact Fermi level), not vacuum. The relative ordering at the
-# junction is what matters:
-#
-#   Broken-gap test:  EV_GaSb_junc  >  EC_InAs_junc
-#   Type-II test:     EV_GaSb_junc  <  EC_InAs_junc, |E_C - E_V| < 0.3 eV
-#
-# In equilibrium across a broken-gap junction the two band edges align
-# at the common Fermi level via a charge-transfer dipole, so the raw
-# numerical difference may be small even when the device is genuinely
-# broken-gap. Confirm by also reading the BULK GaSb VB and BULK InAs
-# CB at probes EV_GaSb (y=0.010) and EC_InAs (y=0.030) and computing
-#     overlap_bulk = EV_GaSb - EC_InAs
-# A positive overlap_bulk confirms the broken-gap alignment.
-#-----------------------------------------------------------------------------
 probe name=EC_GaSb       x=0.001 y=0.010 con.band
 probe name=EV_GaSb       x=0.001 y=0.010 val.band
 probe name=EV_GaSb_junc  x=0.001 y=0.019 val.band
@@ -89,30 +44,35 @@ probe name=EC_InAs       x=0.001 y=0.030 con.band
 probe name=EV_InAs       x=0.001 y=0.030 val.band
 probe name=EC_InGaAs     x=0.001 y=0.050 con.band
 
-# Minimal models / method block for solve init.
-models fermi temperature=300
-method newton
+# Open a log so probes have somewhere to write.
+log outfile=gaa_iiiv_hj_tfet_negf_diag.log
 
-# *** THE FIX vs revision 2 ***
-# Open a master log so probes have somewhere to write. Without this,
-# probe data is computed but never emitted to console or file.
-log outfile=gaa_iiiv_hj_tfet_negf_diag.log master
-
-# solve init computes a fresh equilibrium at V = 0 (the saved .str has
-# no carrier solution, so we cannot restore the post-NEGF V_D=0.5 V
-# state). Equilibrium bands are sufficient for confirming alignment.
+# Fresh equilibrium solve at V = 0 (the loaded .str has no carrier
+# solution to continue from). Bands are determined by affinity / Eg
+# and equilibrium charge transfer, not the applied bias, so V = 0 is
+# sufficient for the alignment check.
 solve init
 
 log off
 
-# View the master log: probe values plotted vs solve step (single bar
-# each, since we only solved once). The probe values are also
-# accessible by opening the .log file in a text editor under headings
-# 'EC_GaSb', 'EV_GaSb', etc.
+# Plot the log; probe values are also visible by opening the .log
+# file in a text editor.
 tonyplot gaa_iiiv_hj_tfet_negf_diag.log
 
-# Visual band-diagram check at the saved bias: open the original .str
-# and use Plot menu -> Cutline -> Direction=Y, X position=0.001.
-tonyplot gaa_iiiv_hj_tfet_negf_btbt_vd05.str
+#-----------------------------------------------------------------------------
+# Interpretation:
+#
+# Broken-gap is confirmed if EV_GaSb (y=0.010, deep source bulk) is
+# greater than EC_InAs (y=0.030, mid-channel bulk). The "+114 meV
+# overlap" expected from chi(GaSb)=4.06, chi(InAs)=4.90, Eg(GaSb)=0.726
+# is most directly visible in these BULK probes, not the AT-JUNCTION
+# probes (the junction probes are pinned together by the equilibrium
+# charge-transfer dipole).
+#
+# ATLAS uses an internal energy reference (typically the source
+# contact Fermi level), not vacuum, so the absolute numbers will be
+# uniformly shifted from the flat-band expectation. The relative
+# difference EV_GaSb - EC_InAs is what matters.
+#-----------------------------------------------------------------------------
 
 quit
