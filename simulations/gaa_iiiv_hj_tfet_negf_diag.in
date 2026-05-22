@@ -1,0 +1,77 @@
+go atlas
+
+#-----------------------------------------------------------------------------
+# Diagnostic deck for the NEGF mode-space run
+#
+# The previous run (gaa_iiiv_hj_tfet_negf.in) completed Stage A through
+# Stage C without aborting, but the Id-Vg curve sat at the 10^-21 A
+# numerical-noise floor with current oscillating symmetrically around
+# zero. That signature means NEGF mode-space produced essentially zero
+# transmission across the GaSb/InAs broken-gap junction.
+#
+# Likely cause: ATLAS effective-mass NEGF_MS builds the Hamiltonian from
+# the conduction-band effective masses on a per-slice basis. There is no
+# off-diagonal matrix element coupling the GaSb valence band to the
+# InAs conduction band, so the Green's function returns T(E) ~= 0 across
+# the Type-III junction. This is a model limitation, not a parameter
+# tuning problem, and is exactly the case study where Carrillo-Nunez
+# 2017 (arXiv:1705.00909) had to use atomistic tight-binding NEGF
+# instead of effective-mass NEGF.
+#
+# Before deciding whether to (a) fall back to the local-Hurkx baseline,
+# (b) apply a Type-II band-shift kludge so NEGF has a real barrier to
+# tunnel through, or (c) move to Victory Atomistic / Nemo5, we want to
+# verify the band alignment ATLAS actually built. This deck does that:
+#
+#   1. Load the saved post-NEGF structure file.
+#   2. Save axial and radial cutlines as separate 1D structures.
+#   3. Hand them to tonyplot so we can visually confirm that
+#         E_V(GaSb)  >  E_C(InAs)
+#      at the source/channel junction, which is the broken-gap
+#      condition we expect for chi(GaSb) = 4.06 eV.
+#-----------------------------------------------------------------------------
+
+# Load the structure produced at the end of Stage B.
+mesh infile=gaa_iiiv_hj_tfet_negf_btbt_vd05.str
+
+# Re-state material parameters so any subsequent band query uses the
+# same affinity / Eg / Nc / Nv that the NEGF run used. mesh infile only
+# loads the geometry and node-by-node solution; material cards are
+# defaults until we issue them again.
+material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19
+material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18
+material material=InGaAs permittivity=13.90 eg300=0.74  affinity=4.50 nc300=2.1e17 nv300=7.7e18
+material material=HfO2   permittivity=22.0  eg300=5.7   affinity=2.05
+
+# Make sure the band fields are written into the cutline structures.
+output con.band val.band qfn qfp e.field
+
+#-----------------------------------------------------------------------------
+# Axial cutline at x = 0.001 um (1 nm from the cylinder axis, well
+# inside the semiconductor core). y runs the full device length, so
+# this slice goes Source(GaSb) -> Channel(InAs) -> Drain(InGaAs) and
+# crosses both heterojunctions at y = 0.020 and y = 0.040.
+#
+# In tonyplot, plot CON.BAND and VAL.BAND vs y. If the run is doing
+# real broken-gap physics we expect:
+#     y < 0.020  : E_V(GaSb)  ~  -4.79 eV (top of GaSb VB),
+#                  E_C(GaSb)  ~  -4.06 eV
+#     y > 0.020  : E_C(InAs)  ~  -4.90 eV
+# so E_V(GaSb) sits ~110 meV ABOVE E_C(InAs) at the junction.
+#-----------------------------------------------------------------------------
+save outfile=gaa_iiiv_hj_tfet_negf_axial.str sec.x=0.001
+
+#-----------------------------------------------------------------------------
+# Radial cutline at y = 0.030 um (mid-channel). x runs from the cylinder
+# axis through the InAs core, the HfO2 gate dielectric, and out into the
+# air. Useful for confirming the gate stack and verifying that the
+# Schrodinger sub-band confinement is happening over the full 5 nm
+# radius.
+#-----------------------------------------------------------------------------
+save outfile=gaa_iiiv_hj_tfet_negf_radial.str sec.y=0.030
+
+# View both cutlines.
+tonyplot gaa_iiiv_hj_tfet_negf_axial.str
+tonyplot gaa_iiiv_hj_tfet_negf_radial.str
+
+quit

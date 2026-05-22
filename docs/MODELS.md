@@ -278,3 +278,80 @@ Trade-offs vs the local-Hurkx baseline:
 Fallback if NEGF stays too slow: `DD_MS` - drift-diffusion mode-space.
 Same Schrodinger sub-bands but classical transport along the wire,
 much cheaper than full Green's-function inversion.
+
+
+
+## 10. NEGF run result and the effective-mass single-band limit
+
+The first end-to-end NEGF run (with the `carriers=0` fix in place)
+completed all three stages without aborting:
+
+- Stage A : DD ramp converged to V_D = 0.5 V, I_D = 1.72e-14 A.
+- Stage B : NEGF self-consistent solve at V_D = 0.5 V completed,
+  Schrodinger 1DX cylindrical solver active, structure saved to
+  `gaa_iiiv_hj_tfet_negf_btbt_vd05.str`.
+- Stage C : full V_G sweep from -0.5 V to +1.0 V at 25 mV step,
+  log written to `gaa_iiiv_hj_tfet_negf_idvg.log`.
+
+But the resulting transfer curve is the numerical noise floor:
+I_D oscillates symmetrically through zero in the range +/- 3e-21 A,
+nine orders of magnitude below the verified local-Hurkx baseline
+(I_ON = 2.34 pA). There is no transistor turn-on with V_G.
+
+Three diagnostic features identify this as zero-transmission noise
+rather than a too-low but still real current:
+
+1. The current is signed (positive AND negative). Real BTBT current
+   is one-sided.
+2. There is no monotonic onset with V_G. The waveform is white noise.
+3. The magnitude tracks the round-off of the Green's function
+   inverter, not any physical scale of the device.
+
+**Why NEGF returned zero transmission.** ATLAS `NEGF_MS` builds the
+device Hamiltonian on a per-slice transverse Schrodinger basis using
+the conduction-band effective masses. There is no off-diagonal matrix
+element coupling the GaSb valence band to the InAs conduction band,
+so the retarded Green's function
+
+    G^R(E) = [E*I - H - Sigma^R(E)]^(-1)
+
+returns T(E) = Tr(Gamma_S * G^R * Gamma_D * G^A) = 0 across the
+Type-III broken-gap junction. The BTBT process - electron in the
+GaSb VB recombining into a state in the InAs CB - has no
+representation in single-band effective-mass NEGF.
+
+This is a model limitation, not a parameter-tuning problem. Raising
+`NPRED.NEGF` from 10 to 20, or `ESIZE.NEGF` from 200 to 400, or
+`EIGEN` from 8 to 16, does not introduce CB-VB coupling. Only an
+atomistic or k.p NEGF (Nemo5 / Victory Atomistic / OMEN) reproduces
+the matrix element required for broken-gap BTBT. Carrillo-Nunez et
+al. 2017 ([arXiv:1705.00909](https://arxiv.org/abs/1705.00909))
+is the standard reference for exactly this device family
+(InAs/GaSb broken-gap GAA HTFET); they used tight-binding mode-space
+NEGF with millions of atoms to match Esaki diode and HTFET
+measurements. Effective-mass NEGF, the version available in
+ATLAS 2019, is not the right tool for that physics.
+
+**Practical conclusion.** The local-Hurkx + BQP baseline
+(`simulations/gaa_iiiv_hj_tfet.in`) remains the production deck for
+this device on this license. It treats BTBT as a generation rate
+tied into the DD continuity equations, which sidesteps the
+single-band coupling problem entirely. The NEGF deck is preserved
+in the repository as documentation of the attempt and as the
+correct starting point if a Victory Atomistic / Nemo5 license
+becomes available.
+
+A short diagnostic deck `simulations/gaa_iiiv_hj_tfet_negf_diag.in`
+loads the saved structure file and writes axial and radial band-
+edge cutlines so the broken-gap alignment can be verified visually
+in tonyplot.
+
+If a "make NEGF produce numbers" path is still wanted, the only
+cheap option is a Type-II shift kludge: raise chi(GaSb) from 4.06
+to ~4.65 eV. That converts the simulated junction from broken-gap
+to staggered, restores a real barrier for the NEGF effective-mass
+Hamiltonian to tunnel through, and produces non-zero transmission.
+The cost is that the simulated device is no longer the real
+GaSb/InAs alignment; V_T will shift by ~50 to 100 meV from the
+true broken-gap value. Acceptable as a sensitivity / sanity
+check, not as a publication result.
