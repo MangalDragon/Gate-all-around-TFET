@@ -1,278 +1,120 @@
-#-----------------------------------------------------------------------------
-# Gate-All-Around III-V Heterojunction Tunnel FET
-# Source : GaSb  (p+, broken-gap)
-# Channel: InAs  (n-, intrinsic)
-# Drain  : InGaAs(n+, In0.53Ga0.47As)
-# Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
-#
-# Solve order (this is the entire trick for broken-gap TFETs):
-#
-#   Stage A  -  DD only, equilibrium and drain ramp to V_DS = 0.5 V.
-#               BTBT models OFF here. DD is unconditionally well-
-#               conditioned at any bias.
-#   Stage B  -  Turn ON BBT.NONLOCAL at V_DS = 0.5 V. The bands are
-#               tilted by V_bi + V_DS ~= 0.79 V; BTBT direction is
-#               unambiguous and Newton sees BTBT as a small perturbation
-#               on the DD solution.
-#   Stage C  -  Turn ON TAT.NONLOCAL on top of B. The carrier
-#               distribution is already settled, so the non-local
-#               TAT WKB integrator has a sensible WKB path.
-#   Stage D  -  Gate sweep 0 -> 1.5 V at fixed V_DS = 0.5 V (transfer).
-#   Stage E  -  Output family at V_GS = {0.5, 1.0, 1.5} V.
-#
-# Why we never solve a BTBT-aware equilibrium at V_DS = 0:
-#   E_V(GaSb) = -chi - Eg = -4.786 eV
-#   E_C(InAs) = -chi      = -4.900 eV
-#   E_V(GaSb) - E_C(InAs) = +0.114 eV  (Type-III, broken gap)
-# The barrier height between source VB and channel CB is NEGATIVE at
-# zero bias, the WKB integrator returns sign-indefinite values
-# ("Code 2 in GetTransmissionProbability"), and Newton diverges from
-# any DD-only initial guess. A built-in V_bi ~= 0.286 V also already
-# tilts the bands. Solving with BBT.NONLOCAL active at V_DS = 0 V is
-# therefore the hardest point in the entire I-V sweep, and it is also
-# the one point we don't need to log.
-#
-# Reference targets at Vd = 0.5 V, room T:
-#   Ion ~ 100 - 800 uA/um (effective perimeter)
-#   Ioff ~ 1e-5 - 1e-3 nA/um
-#   SS_min ~ 30 - 80 mV/dec (BTBT-limited, with TAT)
-#   Vt around 0.2 - 0.5 V depending on confinement & gate WF
-#-----------------------------------------------------------------------------
-go atlas
+go atlas simflags="-P 4"
 
-#-- Geometry knobs (microns) -------------------------------------------------
-set Lg         = 0.020
-set R          = 0.005
-set tOX        = 0.002
-set tGate      = 0.002
-set Lds        = 0.020
+set Lg = 0.020
+set R = 0.005
+set tOX = 0.002
+set tGate = 0.002
+set Lds = 0.020
 set doping_src = 5e19
 set doping_drn = 5e19
-set doping_ch  = 1e15
-# Gate WF: 4.35 eV is a good first guess for n-type TFET. To shift V_T,
-# raise this towards 4.5-4.6 eV (V_T moves up). Functionally equivalent
-# to a BQP confinement shift for transfer-curve work.
-set gate_wf    = 4.35
-set Ychar      = 0.003
+set doping_ch = 1e15
+set gate_wf = 4.35
+set Ychar = 0.003
 
-#-----------------------------------------------------------------------------
-# 1. MESH (cylindrical: X=radial, Y=axial)
-#-----------------------------------------------------------------------------
 MESH CYLINDRICAL
 
-# Radial mesh: refine through channel, oxide, contact ring
 X.MESH loc=0.000   spacing=0.0010
 X.MESH loc=0.003   spacing=0.0005
 X.MESH loc=0.0045  spacing=0.0002
-X.MESH loc=0.005   spacing=0.0001     # channel/oxide interface
+X.MESH loc=0.005   spacing=0.0001
 X.MESH loc=0.006   spacing=0.0001
-X.MESH loc=0.007   spacing=0.0001     # oxide/gate interface
+X.MESH loc=0.007   spacing=0.0001
 X.MESH loc=0.008   spacing=0.0005
 X.MESH loc=0.009   spacing=0.0010
 
-# Axial mesh: very fine across the source/channel tunnel junction (Y=0.020)
-# and across drain/channel junction (Y=0.040)
 Y.MESH loc=0.000   spacing=0.005
 Y.MESH loc=0.003   spacing=0.001
 Y.MESH loc=0.015   spacing=0.0005
 Y.MESH loc=0.018   spacing=0.0002
 Y.MESH loc=0.0195  spacing=0.0001
-Y.MESH loc=0.020   spacing=0.0001     # source/channel tunnel junction
+Y.MESH loc=0.020   spacing=0.0001
 Y.MESH loc=0.0205  spacing=0.0001
 Y.MESH loc=0.022   spacing=0.0002
 Y.MESH loc=0.025   spacing=0.0005
 Y.MESH loc=0.030   spacing=0.0010
 Y.MESH loc=0.035   spacing=0.0010
 Y.MESH loc=0.0395  spacing=0.0001
-Y.MESH loc=0.040   spacing=0.0001     # channel/drain junction
+Y.MESH loc=0.040   spacing=0.0001
 Y.MESH loc=0.043   spacing=0.0005
 Y.MESH loc=0.057   spacing=0.001
 Y.MESH loc=0.060   spacing=0.005
 
-#-- Non-local BTBT/TAT mesh, ONLY at the source/channel tunnel junction ------
-# Width: ~16 nm window centred on the junction.
-# Spacing: 0.1 nm at the junction.
+# QT mesh: tight 50 pm window ONLY +/- 1 nm around the junction (Y=0.020)
+# Previous versions used 0.1 nm over 16 nm -> "mesh not fine enough"
+# because the WKB path is only ~0.3 nm long at this broken-gap alignment.
 QTX.MESH LOC=0.000  SPACING=0.0005
 QTX.MESH LOC=0.0025 SPACING=0.0005
 QTX.MESH LOC=0.005  SPACING=0.0005
 
-QTY.MESH LOC=0.012  SPACING=0.001
-QTY.MESH LOC=0.017  SPACING=0.0002
-QTY.MESH LOC=0.020  SPACING=0.0001    # 0.1 nm at the junction
-QTY.MESH LOC=0.023  SPACING=0.0002
-QTY.MESH LOC=0.028  SPACING=0.001
+QTY.MESH LOC=0.012  SPACING=0.002
+QTY.MESH LOC=0.019  SPACING=0.0005
+QTY.MESH LOC=0.0199 SPACING=0.00005
+QTY.MESH LOC=0.020  SPACING=0.00005
+QTY.MESH LOC=0.0201 SPACING=0.00005
+QTY.MESH LOC=0.021  SPACING=0.0005
+QTY.MESH LOC=0.028  SPACING=0.002
 
-#-----------------------------------------------------------------------------
-# 2. REGIONS
-#-----------------------------------------------------------------------------
-REGION NUM=1 NAME=SRC_GaSb    MATERIAL=GaSb   \
-  Y.MIN=0.003 Y.MAX=0.020     X.MIN=0 X.MAX=0.005
+REGION NUM=1 NAME=SRC_GaSb    MATERIAL=GaSb   Y.MIN=0.003 Y.MAX=0.020 X.MIN=0 X.MAX=0.005
+REGION NUM=2 NAME=CH_InAs     MATERIAL=InAs   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0 X.MAX=0.005
+REGION NUM=3 NAME=DRN_InGaAs  MATERIAL=InGaAs Y.MIN=0.040 Y.MAX=0.057 X.MIN=0 X.MAX=0.005
+REGION NUM=4 NAME=GATE_OX     MATERIAL=HfO2   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.005 X.MAX=0.007
+REGION NUM=5 MATERIAL=Air Y.MIN=0.000 Y.MAX=0.020 X.MIN=0.005 X.MAX=0.009
+REGION NUM=6 MATERIAL=Air Y.MIN=0.040 Y.MAX=0.060 X.MIN=0.005 X.MAX=0.009
 
-REGION NUM=2 NAME=CH_InAs     MATERIAL=InAs   \
-  Y.MIN=0.020 Y.MAX=0.040     X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=SOURCE MATERIAL=Aluminum Y.MIN=0.000 Y.MAX=0.003 X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=DRAIN  MATERIAL=Aluminum Y.MIN=0.057 Y.MAX=0.060 X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=GATE   MATERIAL=Aluminum Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.007 X.MAX=0.009
 
-REGION NUM=3 NAME=DRN_InGaAs  MATERIAL=InGaAs \
-  Y.MIN=0.040 Y.MAX=0.057     X.MIN=0 X.MAX=0.005
+DOPING GAUSSIAN MATERIAL=GaSb   P.TYPE CONCENTRATION=$doping_src Y.MIN=0.003 Y.MAX=0.020 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
+DOPING UNIFORM  MATERIAL=InAs   N.TYPE CONCENTRATION=$doping_ch  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
+DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.040 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
 
-REGION NUM=4 NAME=GATE_OX     MATERIAL=HfO2   \
-  Y.MIN=0.020 Y.MAX=0.040     X.MIN=0.005 X.MAX=0.007
+material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 me.tunnel=0.023 mh.tunnel=0.026 mun=20000 mup=500  taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
+material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 me.tunnel=0.039 mh.tunnel=0.40  mun=3000  mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
+material material=InGaAs permittivity=13.90 eg300=0.74  affinity=4.50 nc300=2.1e17 nv300=7.7e18 me.tunnel=0.041 mh.tunnel=0.050 mun=12000 mup=300  taun0=1e-7 taup0=1e-7 vsatn=2.5e7 vsatp=2.5e7
+material material=HfO2   permittivity=22.0  eg300=5.7   affinity=2.05
 
-REGION NUM=5 MATERIAL=Air \
-  Y.MIN=0.000 Y.MAX=0.020     X.MIN=0.005 X.MAX=0.009
-
-REGION NUM=6 MATERIAL=Air \
-  Y.MIN=0.040 Y.MAX=0.060     X.MIN=0.005 X.MAX=0.009
-
-#-----------------------------------------------------------------------------
-# 3. ELECTRODES
-#-----------------------------------------------------------------------------
-ELECTRODE NAME=SOURCE MATERIAL=Aluminum \
-  Y.MIN=0.000 Y.MAX=0.003     X.MIN=0 X.MAX=0.005
-
-ELECTRODE NAME=DRAIN  MATERIAL=Aluminum \
-  Y.MIN=0.057 Y.MAX=0.060     X.MIN=0 X.MAX=0.005
-
-ELECTRODE NAME=GATE   MATERIAL=Aluminum \
-  Y.MIN=0.020 Y.MAX=0.040     X.MIN=0.007 X.MAX=0.009
-
-#-----------------------------------------------------------------------------
-# 4. DOPING (graded source, uniform channel, graded drain)
-#-----------------------------------------------------------------------------
-DOPING GAUSSIAN MATERIAL=GaSb P.TYPE CONCENTRATION=$doping_src \
-  Y.MIN=0.003 Y.MAX=0.020 X.MAX=0.005 \
-  Y.CHAR=$Ychar X.CHAR=0
-
-DOPING UNIFORM  MATERIAL=InAs N.TYPE CONCENTRATION=$doping_ch \
-  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
-
-DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn \
-  Y.MIN=0.040 Y.MAX=0.060 X.MAX=0.005 \
-  Y.CHAR=$Ychar X.CHAR=0
-
-#-----------------------------------------------------------------------------
-# 5. MATERIALS
-#    Reference: Vurgaftman 2001 (band parameters), Bahuguna 2017 / Avci 2015
-#    (tunneling masses), Mookerjea 2010 (broken-gap GaSb/InAs alignment).
-#-----------------------------------------------------------------------------
-material material=InAs              \
-  permittivity=15.15                \
-  eg300=0.354    affinity=4.90      \
-  nc300=8.7e16   nv300=6.6e18       \
-  me.tunnel=0.023 mh.tunnel=0.026   \
-  mun=20000      mup=500            \
-  taun0=1e-7     taup0=1e-7         \
-  vsatn=4.0e7    vsatp=4.0e7
-
-material material=GaSb              \
-  permittivity=15.70                \
-  eg300=0.726    affinity=4.06      \
-  nc300=2.0e17   nv300=1.3e19       \
-  me.tunnel=0.039 mh.tunnel=0.40    \
-  mun=3000       mup=1000           \
-  taun0=1e-7     taup0=1e-7         \
-  vsatn=7.0e6    vsatp=7.0e6
-
-material material=InGaAs            \
-  permittivity=13.90                \
-  eg300=0.74     affinity=4.50      \
-  nc300=2.1e17   nv300=7.7e18       \
-  me.tunnel=0.041 mh.tunnel=0.050   \
-  mun=12000      mup=300            \
-  taun0=1e-7     taup0=1e-7         \
-  vsatn=2.5e7    vsatp=2.5e7
-
-# HfO2: high-k gate dielectric. eps_r ~ 21-25 typical.
-material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
-
-#-----------------------------------------------------------------------------
-# 6. CONTACTS
-#-----------------------------------------------------------------------------
 contact name=SOURCE
 contact name=DRAIN
 contact name=GATE workfunc=$gate_wf
 
-#-----------------------------------------------------------------------------
-# 7. INTERFACE TRAPS (HfO2 / InAs)
-#-----------------------------------------------------------------------------
-interface x.min=0.005 x.max=0.005 \
-          y.min=0.020 y.max=0.040 \
-          s.n=5e2 s.p=5e2
+interface x.min=0.005 x.max=0.005 y.min=0.020 y.max=0.040 s.n=5e2 s.p=5e2
 
-#-- output what we want to inspect later -------------------------------------
-output band.temp band.param  \
-  qfn qfp                    \
-  j.electron j.hole j.total  \
-  con.band val.band          \
-  e.mobility e.field         \
-  u.bbt u.srh u.aug          \
-  flowlines
+output band.temp band.param qfn qfp j.electron j.hole j.total con.band val.band e.mobility e.field u.srh u.aug flowlines
 
-#=============================================================================
-# STAGE A : DD only - equilibrium AND drain ramp to V_DS = 0.5 V
-#           (BTBT/TAT models DELIBERATELY OFF here)
-#=============================================================================
-models                              \
-  fermi                             \
-  srh auger                         \
-  fldmob                            \
-  temperature=300                   \
-  print
-
-method gummel newton autonr trap maxtrap=10 \
-       itlimit=50 climit=1e-5 dvmax=0.5
+# ===== STAGE A: DD only, equilibrium + drain ramp to 0.5 V =====
+models fermi srh auger fldmob temperature=300 print
+method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
 
 solve init
 save outfile=gaa_iiiv_hj_tfet_eq_DD.str
 
-# DD drain ramp from 0 to 0.5 V. DD is unconditionally robust at any bias.
 solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
-save outfile=gaa_iiiv_hj_tfet_op_dd_vd05.str
+save outfile=gaa_iiiv_hj_tfet_dd_vd05.str
 
-#=============================================================================
-# STAGE B : turn ON BBT.NONLOCAL at V_DS = 0.5 V
-#
-#   - method must be NEWTON, NOT gummel newton: BBT.NONLOCAL refuses the
-#     Gummel iteration ("Need to specify NEWTON or BLOCK method to use
-#     BBT.NONLOCAL model").
-#   - solve prev re-converges at V_DS = 0.5 V with the BTBT generation
-#     term added. This is small (off-state) and Newton converges in a few
-#     iterations because the bands are clearly tilted (V_bi + V_DS ~ 0.79 V).
-#=============================================================================
-models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  fermi                             \
-  srh auger                         \
-  fldmob                            \
-  temperature=300                   \
-  print
-
-method newton autonr trap maxtrap=30 \
-       itlimit=100 climit=1e-5 dvmax=0.05
+# ===== STAGE B: turn on BBT.NONLOCAL (without NLDERIVS first) =====
+# First converge WITHOUT bbt.nlderivs to get a stable BTBT-aware solution.
+# Then re-issue with nlderivs for the sweep.
+models bbt.nonlocal fermi srh auger fldmob temperature=300 print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.025
 
 solve prev
-save outfile=gaa_iiiv_hj_tfet_op_btbt_vd05.str
+save outfile=gaa_iiiv_hj_tfet_btbt_vd05.str
 
-#=============================================================================
-# STAGE C : turn ON TAT.NONLOCAL on top of BTBT at V_DS = 0.5 V
-#=============================================================================
-models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  fermi                             \
-  srh auger                         \
-  fldmob                            \
-  temperature=300                   \
-  print
-
-method newton autonr trap maxtrap=30 \
-       itlimit=100 climit=1e-5 dvmax=0.05
+# Now add NLDERIVS for the sweep (Jacobian coupling)
+models bbt.nonlocal bbt.nlderivs fermi srh auger fldmob temperature=300 print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.025
 
 solve prev
-save outfile=gaa_iiiv_hj_tfet_op_full_vd05.str
 
-#=============================================================================
-# STAGE D : transfer curve - Id-Vg at V_DS = 0.5 V
-#=============================================================================
+# ===== STAGE C: add TAT.NONLOCAL =====
+models bbt.nonlocal bbt.nlderivs tat.nonlocal fermi srh auger fldmob temperature=300 print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.025
+
+solve prev
+save outfile=gaa_iiiv_hj_tfet_full_vd05.str
+
+# ===== STAGE D: transfer curve Id-Vg at Vd = 0.5 V =====
 log outfile=gaa_iiiv_hj_tfet_idvg.log master
 solve name=GATE vgate=0.0 vstep=0.025 vfinal=1.5
 log off
@@ -280,40 +122,26 @@ log off
 save outfile=gaa_iiiv_hj_tfet_on.str
 tonyplot gaa_iiiv_hj_tfet_idvg.log
 
-#=============================================================================
-# STAGE E : output family - Id-Vd at V_GS = 0.5, 1.0, 1.5 V
-#
-# We are at V_DS = 0.5, V_GS = 1.5 V at this point. Walk drain DOWN
-# in small steps before each Id-Vd sweep so Newton never sees a 0.5 V
-# step in any single solve.
-#=============================================================================
+# ===== STAGE E: output family Id-Vd =====
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 
-# --- V_GS = 0.5 V ----------------------------------------------------------
-solve name=GATE  vgate=1.5 vstep=-0.05 vfinal=0.5
+solve name=GATE vgate=1.5 vstep=-0.05 vfinal=0.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg05.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
 log off
 
-# walk drain back to 0
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-
-# --- V_GS = 1.0 V ----------------------------------------------------------
-solve name=GATE  vgate=0.5 vstep=0.05 vfinal=1.0
+solve name=GATE vgate=0.5 vstep=0.05 vfinal=1.0
 log outfile=gaa_iiiv_hj_tfet_idvd_vg10.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-
-# --- V_GS = 1.5 V ----------------------------------------------------------
-solve name=GATE  vgate=1.0 vstep=0.05 vfinal=1.5
+solve name=GATE vgate=1.0 vstep=0.05 vfinal=1.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg15.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
 log off
 
-tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg05.log \
-                  gaa_iiiv_hj_tfet_idvd_vg10.log \
-                  gaa_iiiv_hj_tfet_idvd_vg15.log
+tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg05.log gaa_iiiv_hj_tfet_idvd_vg10.log gaa_iiiv_hj_tfet_idvd_vg15.log
 
 quit
