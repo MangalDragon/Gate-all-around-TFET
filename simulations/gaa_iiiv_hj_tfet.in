@@ -57,26 +57,45 @@ go atlas simflags="-P 4"
 #   - V_G sweep extended to -1.0 V so the ambipolar branch (drain-side
 #     BTBT under negative gate) is visible alongside the main turn-on.
 #
-#   - SOURCE-ONLY BTBT (this revision). The previous run with WF=5.20,
-#     Ychar=0.001 produced a double-humped Id-Vg: a parasitic peak
-#     near V_G=0 (~200 pA) plus the real n-TFET peak at V_G=0.95 V
-#     (~630 pA). The first hump is a known artifact of the local
-#     Hurkx model: BBT.HURKX computes G_BTBT everywhere the local
-#     field is high, including bulk InAs (where the broken-gap
-#     built-in field of ~1 MV/cm is always present at V_G=0) and the
-#     drain-side InAs/InGaAs interface (ambipolar leakage at low V_G).
-#     We suppress these parasitic contributions by setting bbt.a = 0
-#     in InAs and InGaAs, leaving Hurkx active only on the GaSb side.
-#     Physically this corresponds to attributing source-side BTBT
-#     pair generation entirely to the GaSb p+ source (which is the
-#     dominant contribution anyway in a proper non-local treatment).
-#     Net effect: Id-Vg should now be monotonically rising from
-#     V_G < 0 ambipolar shoulder through a clean turn-on near
-#     V_G = 0.3-0.5 V to a saturation plateau at high V_G.
+#   - SOURCE-ONLY BTBT (bbt.a = 0 in InAs and InGaAs, only GaSb keeps
+#     Hurkx active). The previous run with non-zero InAs/InGaAs bbt.a
+#     produced a double-humped Id-Vg with a parasitic peak near V_G=0
+#     (~200 pA) competing with the n-TFET peak at V_G=0.95 V (~630 pA).
+#     Setting InAs/InGaAs bbt.a = 0 cleaned the shape: the first hump
+#     dropped from 200 pA -> 0.3 pA (700x), and the n-TFET branch shifted
+#     from a "peak with roll-off" to a "monotonically rising turn-on"
+#     above V_G ~ 1.1 V. The cost: the n-TFET I_ON also dropped to ~1 pA
+#     because the InAs-side BTBT contribution was carrying about half
+#     the source-channel pair generation. This is a fundamental limit of
+#     local Hurkx in heterojunction TFETs - we cannot pick "InAs side
+#     of the source-channel interface only" geometrically. Increasing
+#     GaSb bbt.a 10x to recover I_ON would also re-amplify the residual
+#     0.3 pA first hump back to ~3 pA. With the current parameters the
+#     I_ON/I_OFF ratio is therefore ~3x at most, set by the broken-gap
+#     built-in field always being present in GaSb regardless of V_G.
+#
+#   - V_T observed at +1.1 V. The earlier prediction (V_T = +0.1 to 0.3 V
+#     based on band-alignment math) was wrong because BTBT does not turn
+#     on at band alignment - it turns on when the local field reaches
+#     ~1 MV/cm so exp(-bbt.b/E) becomes appreciable. With bbt.b = 4e6
+#     V/cm we need E > 0.87 MV/cm for exp(-B/E) > 0.01, which requires
+#     ~1 V of band bending. So V_T ~ 1.1 V is the correct local-Hurkx
+#     threshold, not a model failure. To shift it lower we would have
+#     to either (a) reduce bbt.b further, which raises the I_OFF first
+#     hump too, or (b) lower gate_wf below 5.08 eV, which re-inverts the
+#     curve (already tried at 4.10 and 4.35).
 #
 #   - LDD drain spacer (Y=0.040-0.045 has decaying doping). Reduces
 #     drain-side electric field so any residual ambipolar leakage
 #     from the InGaAs side is further suppressed.
+#
+# TOOL LIMITATION: ATLAS 2019 with BBT.HURKX caps out at ~1-10 pA on
+# this device. The literature uA-range I_ON for GaSb/InAs broken-gap
+# TFETs (Avci 2015, Mookerjea 2010) was obtained with NEGF / atomistic
+# simulators (Nemo5 etc.), not with ATLAS local Hurkx. BBT.NONLOCAL in
+# ATLAS does not converge on broken-gap (5 confirmed attempts in earlier
+# commits, plus an independent third-party report on Stack Overflow with
+# the same "QT mesh not fine enough" wall on a heterojunction).
 
 set Lg = 0.020
 set R = 0.005
@@ -227,34 +246,37 @@ extract init infile="gaa_iiiv_hj_tfet_idvg.log"
 extract name="V_T_n_TFET"  xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
 extract name="SS_mVdec"    1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
 
-# ===== STAGE D: output family Id-Vd at V_GS = 0.7, 0.95, 1.2 V =====
-# These three V_G values bracket the n-TFET ON-region peak observed in
-# the previous Id-Vg run (peak at V_G ~ 0.95 V). V_G=0.5 and 1.5 V used
-# in the prior version sat in the OFF/roll-off regions and produced
-# nearly-flat Id-Vd curves.
+# ===== STAGE D: output family Id-Vd at V_GS = 1.1, 1.3, 1.5 V =====
+# Observed V_T from Stage C is ~+1.1 V (the "real" n-TFET turn-on).
+# The previous Id-Vd points (0.7, 0.95, 1.2 V) sat in the OFF region
+# and the valley between the parasitic first hump and the real turn-on,
+# so V_G=0.95 V actually had LESS current than V_G=0.7 V (it was deeper
+# into the valley). The new V_G points all sit ABOVE V_T, so the family
+# should now be properly ordered with V_G=1.5 V highest and V_G=1.1 V
+# lowest.
 method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.02
 
-solve name=GATE vgate=1.5 vstep=-0.025 vfinal=0.7
+solve name=GATE vgate=1.5 vstep=-0.025 vfinal=1.1
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-log outfile=gaa_iiiv_hj_tfet_idvd_vg07.log master
+log outfile=gaa_iiiv_hj_tfet_idvd_vg11.log master
 solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
 solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-solve name=GATE  vgate=0.7 vstep=0.025 vfinal=0.95
-log outfile=gaa_iiiv_hj_tfet_idvd_vg095.log master
+solve name=GATE  vgate=1.1 vstep=0.025 vfinal=1.3
+log outfile=gaa_iiiv_hj_tfet_idvd_vg13.log master
 solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
 solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-solve name=GATE  vgate=0.95 vstep=0.025 vfinal=1.2
-log outfile=gaa_iiiv_hj_tfet_idvd_vg12.log master
+solve name=GATE  vgate=1.3 vstep=0.025 vfinal=1.5
+log outfile=gaa_iiiv_hj_tfet_idvd_vg15.log master
 solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
 solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
-tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg07.log gaa_iiiv_hj_tfet_idvd_vg095.log gaa_iiiv_hj_tfet_idvd_vg12.log
+tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg11.log gaa_iiiv_hj_tfet_idvd_vg13.log gaa_iiiv_hj_tfet_idvd_vg15.log
 
 quit
