@@ -56,6 +56,27 @@ go atlas simflags="-P 4"
 #
 #   - V_G sweep extended to -1.0 V so the ambipolar branch (drain-side
 #     BTBT under negative gate) is visible alongside the main turn-on.
+#
+#   - SOURCE-ONLY BTBT (this revision). The previous run with WF=5.20,
+#     Ychar=0.001 produced a double-humped Id-Vg: a parasitic peak
+#     near V_G=0 (~200 pA) plus the real n-TFET peak at V_G=0.95 V
+#     (~630 pA). The first hump is a known artifact of the local
+#     Hurkx model: BBT.HURKX computes G_BTBT everywhere the local
+#     field is high, including bulk InAs (where the broken-gap
+#     built-in field of ~1 MV/cm is always present at V_G=0) and the
+#     drain-side InAs/InGaAs interface (ambipolar leakage at low V_G).
+#     We suppress these parasitic contributions by setting bbt.a = 0
+#     in InAs and InGaAs, leaving Hurkx active only on the GaSb side.
+#     Physically this corresponds to attributing source-side BTBT
+#     pair generation entirely to the GaSb p+ source (which is the
+#     dominant contribution anyway in a proper non-local treatment).
+#     Net effect: Id-Vg should now be monotonically rising from
+#     V_G < 0 ambipolar shoulder through a clean turn-on near
+#     V_G = 0.3-0.5 V to a saturation plateau at high V_G.
+#
+#   - LDD drain spacer (Y=0.040-0.045 has decaying doping). Reduces
+#     drain-side electric field so any residual ambipolar leakage
+#     from the InGaAs side is further suppressed.
 
 set Lg = 0.020
 set R = 0.005
@@ -111,20 +132,33 @@ ELECTRODE NAME=GATE   MATERIAL=Aluminum Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.007 X.MA
 
 DOPING GAUSSIAN MATERIAL=GaSb   P.TYPE CONCENTRATION=$doping_src Y.MIN=0.003 Y.MAX=0.020 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
 DOPING UNIFORM  MATERIAL=InAs   N.TYPE CONCENTRATION=$doping_ch  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
-DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.040 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
+# Drain doping with 5 nm LDD spacer at the channel-drain boundary:
+#   Y=0.040 - 0.045 : LDD region, only the Gaussian tail of the n+
+#                     drain extends in here (graded from ~1e17 to
+#                     5e19 over 5 nm). This kills the drain-side
+#                     electric field that drives ambipolar BTBT.
+#   Y=0.045 - 0.060 : full n+ drain at 5e19.
+DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.045 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=0.002 X.CHAR=0
 
 # bbt.a / bbt.b are the Hurkx/Kane coefficients used by BBT.HURKX.
-# Calibrated to broken-gap GaSb/InAs literature (Mookerjea 2010, Avci 2015):
-#   - InAs/InGaAs: A=4e15 cm^-1 V^-2 s^-1, B=4e6 V/cm
-#   - GaSb:        A=9.1e15,               B=4e6 V/cm
-# A is ~10x and B is ~4.75x SMALLER than textbook III-V Kane values.
-# The B reduction is the key knob: it is the WKB exponent prefactor and
-# accounts for the broken-gap (Type-III) alignment having effectively
-# zero forbidden gap between E_V(GaSb) and E_C(InAs). With these values,
-# I_BTBT at E ~ 2 MV/cm is exp(-2) ~ 0.14 instead of exp(-4) ~ 0.018,
-# i.e. 7-8x more BTBT current at the same junction field.
+# CRITICAL: bbt.a = 0 in InAs and InGaAs. The local Hurkx model
+# computes BTBT generation everywhere the local field is high, which
+# includes bulk InAs (always exposed to a 1 MV/cm built-in field due
+# to the broken-gap alignment) and the InAs side of the InAs/InGaAs
+# drain interface (ambipolar leakage path). Both are parasitic in this
+# device. By zeroing bbt.a in those two materials we restrict pair
+# generation to the GaSb p+ source, where it physically originates.
+# In a non-local treatment, BTBT carriers are generated in pairs that
+# straddle the GaSb/InAs interface; the local model cannot represent
+# that, so we attribute the entire source-side pair generation to the
+# GaSb side as the cleanest single-material approximation.
+#
+# GaSb (only): A=9.1e15 cm^-1 V^-2 s^-1, B=4e6 V/cm. ~10x larger A and
+# ~5x smaller B than textbook III-V Kane values, matched to broken-gap
+# GaSb/InAs measurements (Mookerjea 2010, Avci 2015). At E ~ 2 MV/cm:
+#     G = A * E^2 * exp(-B/E) = 9.1e15 * 4e12 * exp(-2) = 4.9e27 /cc/s
 material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
-  me.tunnel=0.023 mh.tunnel=0.026 bbt.a=4.0e15 bbt.b=4.0e6 \
+  me.tunnel=0.023 mh.tunnel=0.026 bbt.a=0 bbt.b=4.0e6 \
   mun=20000 mup=500 taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
 
 material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 \
@@ -132,7 +166,7 @@ material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e
   mun=3000 mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
 
 material material=InGaAs permittivity=13.90 eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
-  me.tunnel=0.041 mh.tunnel=0.050 bbt.a=4.0e15 bbt.b=4.0e6 \
+  me.tunnel=0.041 mh.tunnel=0.050 bbt.a=0 bbt.b=4.0e6 \
   mun=12000 mup=300 taun0=1e-7 taup0=1e-7 vsatn=2.5e7 vsatp=2.5e7
 
 material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
@@ -179,38 +213,45 @@ solve name=GATE vgate=-1.0 vstep=0.025 vfinal=1.5
 log off
 
 save outfile=gaa_iiiv_hj_tfet_on.str
-tonyplot gaa_iiiv_hj_tfet_idvg.log
 
-# ===== STAGE D: output family Id-Vd at V_GS = 0.5, 1.0, 1.5 V =====
-# Tighter solver tolerances for the Id-Vd sweeps (the Newton trap can
-# spike near V_D=0 if the previous bias point was far from this one).
+# Plot Id-Vg on linear scale, then on log scale for SS extraction.
+tonyplot gaa_iiiv_hj_tfet_idvg.log
+tonyplot -st gaa_iiiv_hj_tfet_idvg.log -set log10y
+
+# Extract V_T (max-slope x-intercept) and SS (1/max-slope of log10|Id|).
+# These print to the deckbuild console in the run output.
+extract init infile="gaa_iiiv_hj_tfet_idvg.log"
+extract name="V_T_n_TFET"   xintercept(maxslope(curve(v."gate", abs(i."drain"))))
+extract name="SS_mVdec"     1000.0 / maxslope(curve(v."gate", log10(abs(i."drain"))))
+
+# ===== STAGE D: output family Id-Vd at V_GS = 0.7, 0.95, 1.2 V =====
+# These three V_G values bracket the n-TFET ON-region peak observed in
+# the previous Id-Vg run (peak at V_G ~ 0.95 V). V_G=0.5 and 1.5 V used
+# in the prior version sat in the OFF/roll-off regions and produced
+# nearly-flat Id-Vd curves.
 method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.02
 
-# Bring V_G back to the first output-family operating point (0.5 V).
-# Ramping V_G in fine steps avoids the negative-current convergence
-# artifact at V_D=0 that we saw in the previous run.
-solve name=GATE vgate=1.5 vstep=-0.025 vfinal=0.5
+solve name=GATE vgate=1.5 vstep=-0.025 vfinal=0.7
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-
-log outfile=gaa_iiiv_hj_tfet_idvd_vg05.log master
-solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
+log outfile=gaa_iiiv_hj_tfet_idvd_vg07.log master
+solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
 solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-solve name=GATE  vgate=0.5 vstep=0.025 vfinal=1.0
-log outfile=gaa_iiiv_hj_tfet_idvd_vg10.log master
-solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
+solve name=GATE  vgate=0.7 vstep=0.025 vfinal=0.95
+log outfile=gaa_iiiv_hj_tfet_idvd_vg095.log master
+solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
 solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-solve name=GATE  vgate=1.0 vstep=0.025 vfinal=1.5
-log outfile=gaa_iiiv_hj_tfet_idvd_vg15.log master
-solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
+solve name=GATE  vgate=0.95 vstep=0.025 vfinal=1.2
+log outfile=gaa_iiiv_hj_tfet_idvd_vg12.log master
+solve name=DRAIN vdrain=0.0  vstep=0.01  vfinal=0.05
 solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
-tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg05.log gaa_iiiv_hj_tfet_idvd_vg10.log gaa_iiiv_hj_tfet_idvd_vg15.log
+tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg07.log gaa_iiiv_hj_tfet_idvd_vg095.log gaa_iiiv_hj_tfet_idvd_vg12.log
 
 quit
