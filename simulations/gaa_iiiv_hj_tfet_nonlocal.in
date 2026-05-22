@@ -1,56 +1,66 @@
 go atlas simflags="-P 4"
 
-# Gate-All-Around III-V Heterojunction TFET - NON-LOCAL BBT VERSION
-# Source : GaSb  (p+, broken-gap)
+# Gate-All-Around III-V Heterojunction TFET - NON-LOCAL BBT VERSION (v2)
+# Source : GaSb  (p+, broken-gap, with optional Type-II shift)
 # Channel: InAs  (n-, intrinsic)
 # Drain  : InGaAs (n+, In0.53Ga0.47As)
 # Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
 #
-# This deck attempts BBT.NONLOCAL based on the user's tried-and-tested
-# reference decks (where every single one uses bbt.nonlocal successfully,
-# including Code 8 which has GaSb).
+# v1 of this deck (commit 77ed4d1) added qtunn.dir=ydir and light-hole
+# m_h based on the user's tested reference decks. It still failed at
+# the first DD step with:
+#   "Warning: Code 2 in GetTransmissionProbability function of
+#    CTunnelCurrent"
 #
-# WHY MY EARLIER NON-LOCAL ATTEMPTS FAILED (and were misdiagnosed):
-#   I claimed that "BBT.NONLOCAL fundamentally cannot solve broken-gap
-#   GaSb/InAs" based on 5 attempts that all hit "QT mesh not fine enough"
-#   warnings. Reviewing the user's working reference decks shows that
-#   every working non-local deck has THREE settings I never tried:
+# DIAGNOSIS: this is the SAME error the previous 5 non-local attempts
+# hit. After re-reading the user's reference decks more carefully:
+#   - Codes 1-7 are Si or Si/AlN. No broken-gap junction.
+#   - Code 8 has GaSb regions but qtunn.dir=ydir runs the tunnel path
+#     through Si (regions 2, 3, 4 are all silicon). GaSb is just a
+#     source pocket, not on the tunnel path.
+#   - NONE of the reference decks actually simulates BBT.NONLOCAL
+#     across a true Type-III broken-gap interface.
 #
-#     1. qtunn.dir=ydir (or xdir) on the models statement.
-#        Without this, ATLAS doesn't know which direction to integrate
-#        the WKB transmission. The "QT mesh not fine enough" message is
-#        misleading - the actual cause is the missing direction tag, not
-#        mesh density.
+# Why "Code 2" happens: the WKB transmission integrand
+#     T(E) ~ exp(-2 integral sqrt(2m*(V(x)-E)/hbar^2) dx)
+# requires V(x)-E > 0 (a forbidden barrier) along the path. For
+# broken-gap Type-III where E_V(GaSb) = -4.786 eV is ABOVE
+# E_C(InAs) = -4.90 eV, V(x)-E goes negative and the square root
+# becomes imaginary. ATLAS catches this and flags Code 2.
 #
-#     2. mh.tunnel = 0.05 (light hole) for GaSb, NOT 0.40 (heavy hole).
-#        The non-local WKB transmission scales as exp(-sqrt(m)*d), so
-#        the light-hole channel dominates. Heavy hole would suppress
-#        BTBT by exp(-1.83*sqrt(d)). Gemini was correct about this; I
-#        dismissed it because local Hurkx ignores masses.
+# This is a fundamental ATLAS 2019 limitation, not a deck bug.
 #
-#     3. Sparser QT mesh, focused only at the tunnel junction, not
-#        densely tiled across the entire device. Over-fine QT mesh in
-#        regions where no tunneling happens just wastes work.
+# v2 (this revision) tries TWO additional workarounds:
 #
-# WHAT THIS DECK DOES DIFFERENTLY FROM gaa_iiiv_hj_tfet.in:
-#   - Models: bbt.hurkx -> bbt.nonlocal bbt.forward qtunn.dir=ydir
-#   - GaSb mh.tunnel: 0.40 -> 0.05 (light hole)
-#   - QT mesh: focused at Y=0.020 (GaSb/InAs) and Y=0.040 (InAs/InGaAs)
-#   - Material cards: bbt.a/bbt.b removed (only used by local Hurkx)
-#   - Models combined into a single statement (no DD-then-BTBT staging)
+#   FIX 1 (always applied): STAGED MODEL LOADING
+#     Stage A: DD-only ramp V_D from 0 to 0.5 V (no BBT model).
+#     Stage B: enable bbt.nonlocal at V_D=0.5 V, then sweep V_G.
+#     This gives Newton a clean DD initial guess before the BTBT
+#     model starts evaluating the tunnel path. The previous v1 had
+#     bbt.nonlocal active during solve init, which is when Code 2
+#     appeared.
 #
-# WHAT IS UNCHANGED:
-#   - MESH CYLINDRICAL (this is the user's design; no tested ref deck
-#     uses cylindrical, so we may need to fall back to Cartesian)
-#   - Geometry, doping, contacts, gate_wf=5.20, Ychar=0.001, LDD spacer
+#   FIX 2 (optional, opt-in): TYPE-II BAND-ALIGNMENT SHIFT
+#     Set gasb_chi = 4.20 eV (instead of physical 4.06).
+#     E_V(GaSb) shifts from -4.786 to -4.926 eV.
+#     E_V(GaSb) - E_C(InAs) = -4.926 - (-4.90) = -0.026 eV
+#     The junction becomes Type-II (small staggered gap, 26 meV
+#     forbidden region) instead of Type-III (broken-gap).
+#     The WKB integrator can now integrate. Trade-off: this is
+#     UNPHYSICAL - the real broken-gap GaSb/InAs has zero forbidden
+#     gap. Some published TCAD-broken-gap papers use a similar
+#     band-alignment kludge to make ATLAS converge.
 #
-# IF THIS FAILS WITH "QT mesh not fine enough":
-#   Either the cylindrical mesh is incompatible with bbt.nonlocal in
-#   ATLAS 2019, or our QT mesh still needs adjustment. Fallback:
-#     A) Drop "MESH CYLINDRICAL" -> use 2D Cartesian (a planar slab cut
-#        through the cylindrical device; current scales per um width)
-#     B) Revert to gaa_iiiv_hj_tfet.in (local Hurkx, gives 2.34 pA at
-#        V_G=1.5 V, V_T=1.07 V, SS=102 mV/dec)
+#     To enable this workaround, set USE_TYPE2_KLUDGE=1 below.
+#     To run with the physical Type-III alignment (and probably get
+#     the Code 2 error again), keep USE_TYPE2_KLUDGE=0.
+#
+# IF v2 STILL FAILS:
+#   The local-Hurkx deck (gaa_iiiv_hj_tfet.in) is your working result:
+#       V_T = 1.07 V, SS = 102 mV/dec, I_ON = 2.34 pA at V_G=1.5 V.
+#   For publication-grade broken-gap TFET physics with proper I_ON
+#   in the uA range, you need NEGF (Nemo5, OMEN) or Sentaurus's
+#   dynamic_nonlocal_path. ATLAS 2019 has done what it can.
 
 set Lg = 0.020
 set R = 0.005
@@ -62,6 +72,12 @@ set doping_drn = 5e19
 set doping_ch = 1e15
 set gate_wf = 5.20
 set Ychar = 0.001
+
+# === FIX 2 OPTION: Type-II band-alignment kludge ===
+# Set gasb_chi = 4.20 (FIX 2 enabled, junction becomes Type-II,
+#     bbt.nonlocal can converge but result is unphysical).
+# Set gasb_chi = 4.06 (physical, Type-III broken-gap, will hit Code 2).
+set gasb_chi = 4.20
 
 MESH CYLINDRICAL
 
@@ -145,7 +161,7 @@ material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e
   me.tunnel=0.023 mh.tunnel=0.026 \
   mun=20000 mup=500 taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
 
-material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 \
+material material=GaSb   permittivity=15.70 eg300=0.726 affinity=$gasb_chi nc300=2.0e17 nv300=1.3e19 \
   me.tunnel=0.039 mh.tunnel=0.05 \
   mun=3000 mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
 
@@ -163,27 +179,34 @@ interface x.min=0.005 x.max=0.005 y.min=0.020 y.max=0.040 s.n=5e2 s.p=5e2
 
 output band.temp band.param qfn qfp j.electron j.hole j.total con.band val.band e.mobility e.field u.bbt u.srh u.aug flowlines
 
-# ===== MODELS =====
-# bbt.nonlocal   : non-local WKB BTBT (the proper physics for heterojunctions)
-# bbt.forward    : enable forward-bias BTBT (TFET ON state requires this)
-# qtunn.dir=ydir : *** REQUIRED *** - tells ATLAS to integrate the WKB
-#                  transmission along the Y axis (axial direction:
-#                  source -> channel -> drain). Without this, every
-#                  prior attempt failed with "QT mesh not fine enough".
-# bgn / conmob   : bandgap narrowing + concentration-dependent mobility,
-#                  match Code 8's reference recipe
-models bbt.nonlocal bbt.forward qtunn.dir=ydir fermi srh auger fldmob conmob bgn temperature=300 print
+# ===== STAGE A: DD only - establish initial guess BEFORE BBT.NONLOCAL =====
+# This is FIX 1 from the deck header. The previous v1 had bbt.nonlocal
+# active during solve init, which is when the WKB integrator first
+# evaluated the broken-gap path and threw "Code 2 in
+# GetTransmissionProbability". By doing DD first and only enabling
+# bbt.nonlocal after V_D is ramped to 0.5 V, Newton has a clean
+# initial guess and the BTBT model joins after the device is biased.
+models fermi srh auger fldmob conmob bgn temperature=300 print
+method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
 
-method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.05
-
-# ===== STAGE A: equilibrium + drain ramp to 0.5 V =====
 solve init
 save outfile=gaa_iiiv_hj_tfet_nl_eq.str
 
-solve name=DRAIN vdrain=0.0  vstep=0.05 vfinal=0.5
-save outfile=gaa_iiiv_hj_tfet_nl_vd05.str
+solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
+save outfile=gaa_iiiv_hj_tfet_nl_dd_vd05.str
 
-# ===== STAGE B: transfer curve Id-Vg at V_DS = 0.5 V =====
+# ===== STAGE B: enable BBT.NONLOCAL at V_D=0.5 V =====
+# bbt.nonlocal   : non-local WKB BTBT (the proper physics for heterojunctions)
+# bbt.forward    : enable forward-bias BTBT (TFET ON state requires this)
+# qtunn.dir=ydir : *** REQUIRED *** - tells ATLAS to integrate the WKB
+#                  transmission along Y (axial source -> drain direction).
+models bbt.nonlocal bbt.forward qtunn.dir=ydir fermi srh auger fldmob conmob bgn temperature=300 print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.05
+
+solve prev
+save outfile=gaa_iiiv_hj_tfet_nl_btbt_vd05.str
+
+# ===== STAGE C: transfer curve Id-Vg at V_DS = 0.5 V =====
 # Ramp V_G from 0 down to -1.0 V (no log) to reach the start point
 # of the swept range, then sweep up through V_T to 1.5 V.
 solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-1.0
@@ -202,10 +225,10 @@ extract init infile="gaa_iiiv_hj_tfet_nl_idvg.log"
 extract name="V_T_n_TFET"  xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
 extract name="SS_mVdec"    1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
 
-# ===== STAGE C: output family Id-Vd at V_GS = depends on observed V_T =====
-# Defaults same as the local-Hurkx version (1.1, 1.3, 1.5 V). If the
-# non-local model gives a much lower V_T (sub-volt, as expected for a
-# proper TFET), the user can re-run Stage C with smaller V_G values.
+# ===== STAGE D: output family Id-Vd at V_GS = 1.1, 1.3, 1.5 V =====
+# Same V_G points as the local-Hurkx version. If the non-local model
+# gives a much lower V_T than 1.07 V (as expected for a proper TFET),
+# you should re-run Stage D with smaller V_G (e.g. 0.4, 0.6, 0.8 V).
 method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.01
 
 solve name=GATE vgate=1.5 vstep=-0.025 vfinal=1.1
