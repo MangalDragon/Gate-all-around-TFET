@@ -106,12 +106,30 @@ in ATLAS for two reasons (per the Silvaco BQP application note):
 2. Numerically stable, decoupled from the choice of transport model
    (drift-diffusion or hydrodynamic).
 
-Default starting values: `gamma.n = gamma.p = 1.4`, `alpha.n = alpha.p =
-0.3`. These were calibrated against Schroedinger-Poisson for silicon
-nanowires and reproduce the InAs nanowire first-sub-band shift to within
-~20 meV. For final calibration, fit `gamma`/`alpha` to either an
-atomistic (NEMO/Victory Atomistic) reference or to a published ETB
-calculation for the same diameter.
+Default starting values: ATLAS 2019 ships with internal calibration for
+`BQP.N`/`BQP.P`. Per the Silvaco BQP application note the canonical
+calibration constants are `gamma = 1.4` and `alpha = 0.3` (fitted for
+silicon nanowires against Schrodinger-Poisson). For InAs nanowires
+those same constants reproduce the first-sub-band shift to within
+~20 meV, which is good enough for design-space work.
+
+**ATLAS 2019 syntax caveat.** In the 2019 build, the BQP material-level
+parameters are not exposed under the `alpha.n / alpha.p` keys you might
+expect from the docs:
+
+```
+material material=InAs gamma.n=1.4 alpha.n=0.3 gamma.p=1.4 alpha.p=0.3
+                                   ^^^^^^^^^^^             ^^^^^^^^^^^
+                                   invalid                 invalid
+```
+
+The deck therefore leaves BQP at defaults. If your patch level accepts
+calibration on the `models` card (varies by build), the form is
+typically `models ... bqp.n bqp.p bqp.gamma=1.4 bqp.alpha=0.3`; smoke-
+test on one material before relying on it. The functionally equivalent
+calibration knob is the gate workfunction (or a fixed interface charge)
+- both shift V_T monotonically and are easier to anchor against measured
+data.
 
 Alternative: `DGLOG` (Density Gradient). The ATLAS BQP note explicitly
 recommends BQP over DG for nanowires.
