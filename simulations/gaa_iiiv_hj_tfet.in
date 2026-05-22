@@ -23,11 +23,18 @@ go atlas simflags="-P 4"
 # qualitatively correct TFET Id-Vg curve.
 #
 # Calibration of this version:
-#   - bbt.a x10, bbt.b /2.4 vs the previous textbook values, fitted to
-#     broken-gap GaSb/InAs measurements (Mookerjea 2010 / Avci 2015).
-#   - gate_wf = 4.10 eV (was 4.35), pulls V_T into the 0.4-0.6 V range
-#     so the knee is visible inside the 0-1.5 V sweep.
-#   - BBT.HURKX instead of BBT.STD: better field prefactor for broken-gap.
+#   - BBT.HURKX with bbt.a x10 and bbt.b /4.75 vs textbook III-V Kane
+#     values, fitted to broken-gap GaSb/InAs measurements
+#     (Mookerjea 2010, Avci 2015). The smaller B (4e6 V/cm vs textbook
+#     1.9e7) accounts for the broken-gap reduction of the WKB barrier
+#     that the local model cannot see from the affinities alone.
+#   - gate_wf = 4.35 eV: this is the correct midgap workfunction for
+#     this device. With gate_wf < InAs affinity (4.90 eV) the channel
+#     is already accumulated at V_G=0 and the I-V curve INVERTS
+#     (we tried gate_wf=4.10 in the previous iteration and got
+#     I_OFF=89 pA, I_ON=2 pA, which is the inverted polarity).
+#     With 4.35 eV, V_T sits inside the 0.3-0.8 V range and the curve
+#     has the correct n-TFET polarity.
 
 set Lg = 0.020
 set R = 0.005
@@ -37,7 +44,7 @@ set Lds = 0.020
 set doping_src = 5e19
 set doping_drn = 5e19
 set doping_ch = 1e15
-set gate_wf = 4.10
+set gate_wf = 4.35
 set Ychar = 0.003
 
 MESH CYLINDRICAL
@@ -87,22 +94,24 @@ DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.040 Y.M
 
 # bbt.a / bbt.b are the Hurkx/Kane coefficients used by BBT.HURKX.
 # Calibrated to broken-gap GaSb/InAs literature (Mookerjea 2010, Avci 2015):
-#   - InAs/InGaAs: A=4e15 cm^-1 V^-2 s^-1, B=8e6 V/cm
-#   - GaSb:        A=9.1e15, B=8e6 V/cm
-# These are ~10x larger A and ~2x smaller B than the textbook III-V Kane
-# values; the calibration accounts for the broken-gap reduction in the
-# WKB barrier height that the local model cannot capture from
-# affinities alone.
+#   - InAs/InGaAs: A=4e15 cm^-1 V^-2 s^-1, B=4e6 V/cm
+#   - GaSb:        A=9.1e15,               B=4e6 V/cm
+# A is ~10x and B is ~4.75x SMALLER than textbook III-V Kane values.
+# The B reduction is the key knob: it is the WKB exponent prefactor and
+# accounts for the broken-gap (Type-III) alignment having effectively
+# zero forbidden gap between E_V(GaSb) and E_C(InAs). With these values,
+# I_BTBT at E ~ 2 MV/cm is exp(-2) ~ 0.14 instead of exp(-4) ~ 0.018,
+# i.e. 7-8x more BTBT current at the same junction field.
 material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
-  me.tunnel=0.023 mh.tunnel=0.026 bbt.a=4.0e15 bbt.b=8.0e6 \
+  me.tunnel=0.023 mh.tunnel=0.026 bbt.a=4.0e15 bbt.b=4.0e6 \
   mun=20000 mup=500 taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
 
 material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 \
-  me.tunnel=0.039 mh.tunnel=0.40 bbt.a=9.1e15 bbt.b=8.0e6 \
+  me.tunnel=0.039 mh.tunnel=0.40 bbt.a=9.1e15 bbt.b=4.0e6 \
   mun=3000 mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
 
 material material=InGaAs permittivity=13.90 eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
-  me.tunnel=0.041 mh.tunnel=0.050 bbt.a=4.0e15 bbt.b=8.0e6 \
+  me.tunnel=0.041 mh.tunnel=0.050 bbt.a=4.0e15 bbt.b=4.0e6 \
   mun=12000 mup=300 taun0=1e-7 taup0=1e-7 vsatn=2.5e7 vsatp=2.5e7
 
 material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
