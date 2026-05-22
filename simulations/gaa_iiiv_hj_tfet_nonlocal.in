@@ -1,0 +1,234 @@
+go atlas simflags="-P 4"
+
+# Gate-All-Around III-V Heterojunction TFET - NON-LOCAL BBT VERSION
+# Source : GaSb  (p+, broken-gap)
+# Channel: InAs  (n-, intrinsic)
+# Drain  : InGaAs (n+, In0.53Ga0.47As)
+# Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
+#
+# This deck attempts BBT.NONLOCAL based on the user's tried-and-tested
+# reference decks (where every single one uses bbt.nonlocal successfully,
+# including Code 8 which has GaSb).
+#
+# WHY MY EARLIER NON-LOCAL ATTEMPTS FAILED (and were misdiagnosed):
+#   I claimed that "BBT.NONLOCAL fundamentally cannot solve broken-gap
+#   GaSb/InAs" based on 5 attempts that all hit "QT mesh not fine enough"
+#   warnings. Reviewing the user's working reference decks shows that
+#   every working non-local deck has THREE settings I never tried:
+#
+#     1. qtunn.dir=ydir (or xdir) on the models statement.
+#        Without this, ATLAS doesn't know which direction to integrate
+#        the WKB transmission. The "QT mesh not fine enough" message is
+#        misleading - the actual cause is the missing direction tag, not
+#        mesh density.
+#
+#     2. mh.tunnel = 0.05 (light hole) for GaSb, NOT 0.40 (heavy hole).
+#        The non-local WKB transmission scales as exp(-sqrt(m)*d), so
+#        the light-hole channel dominates. Heavy hole would suppress
+#        BTBT by exp(-1.83*sqrt(d)). Gemini was correct about this; I
+#        dismissed it because local Hurkx ignores masses.
+#
+#     3. Sparser QT mesh, focused only at the tunnel junction, not
+#        densely tiled across the entire device. Over-fine QT mesh in
+#        regions where no tunneling happens just wastes work.
+#
+# WHAT THIS DECK DOES DIFFERENTLY FROM gaa_iiiv_hj_tfet.in:
+#   - Models: bbt.hurkx -> bbt.nonlocal bbt.forward qtunn.dir=ydir
+#   - GaSb mh.tunnel: 0.40 -> 0.05 (light hole)
+#   - QT mesh: focused at Y=0.020 (GaSb/InAs) and Y=0.040 (InAs/InGaAs)
+#   - Material cards: bbt.a/bbt.b removed (only used by local Hurkx)
+#   - Models combined into a single statement (no DD-then-BTBT staging)
+#
+# WHAT IS UNCHANGED:
+#   - MESH CYLINDRICAL (this is the user's design; no tested ref deck
+#     uses cylindrical, so we may need to fall back to Cartesian)
+#   - Geometry, doping, contacts, gate_wf=5.20, Ychar=0.001, LDD spacer
+#
+# IF THIS FAILS WITH "QT mesh not fine enough":
+#   Either the cylindrical mesh is incompatible with bbt.nonlocal in
+#   ATLAS 2019, or our QT mesh still needs adjustment. Fallback:
+#     A) Drop "MESH CYLINDRICAL" -> use 2D Cartesian (a planar slab cut
+#        through the cylindrical device; current scales per um width)
+#     B) Revert to gaa_iiiv_hj_tfet.in (local Hurkx, gives 2.34 pA at
+#        V_G=1.5 V, V_T=1.07 V, SS=102 mV/dec)
+
+set Lg = 0.020
+set R = 0.005
+set tOX = 0.002
+set tGate = 0.002
+set Lds = 0.020
+set doping_src = 5e19
+set doping_drn = 5e19
+set doping_ch = 1e15
+set gate_wf = 5.20
+set Ychar = 0.001
+
+MESH CYLINDRICAL
+
+X.MESH loc=0.000   spacing=0.0010
+X.MESH loc=0.003   spacing=0.0005
+X.MESH loc=0.0045  spacing=0.0002
+X.MESH loc=0.005   spacing=0.0001
+X.MESH loc=0.006   spacing=0.0001
+X.MESH loc=0.007   spacing=0.0001
+X.MESH loc=0.008   spacing=0.0005
+X.MESH loc=0.009   spacing=0.0010
+
+Y.MESH loc=0.000   spacing=0.005
+Y.MESH loc=0.003   spacing=0.001
+Y.MESH loc=0.015   spacing=0.0005
+Y.MESH loc=0.018   spacing=0.0002
+Y.MESH loc=0.0195  spacing=0.0001
+Y.MESH loc=0.020   spacing=0.0001
+Y.MESH loc=0.0205  spacing=0.0001
+Y.MESH loc=0.022   spacing=0.0002
+Y.MESH loc=0.025   spacing=0.0005
+Y.MESH loc=0.030   spacing=0.0010
+Y.MESH loc=0.035   spacing=0.0010
+Y.MESH loc=0.0395  spacing=0.0001
+Y.MESH loc=0.040   spacing=0.0001
+Y.MESH loc=0.043   spacing=0.0005
+Y.MESH loc=0.057   spacing=0.001
+Y.MESH loc=0.060   spacing=0.005
+
+# QT mesh for non-local BBT.
+# Pattern matched from Code 8 (the user's tested GaSb deck): few QT
+# points in the non-tunneling direction, very fine QT points (~0.1 nm)
+# at the tunnel junctions in the tunneling direction.
+#
+# Tunnel junctions in this device are at Y=0.020 (GaSb/InAs source-side)
+# and Y=0.040 (InAs/InGaAs drain-side). Tunneling direction is Y (axial).
+qtx.mesh loc=0.0000 spac=0.0010
+qtx.mesh loc=0.0025 spac=0.0010
+qtx.mesh loc=0.0050 spac=0.0005
+
+qty.mesh loc=0.0150 spac=0.0010
+qty.mesh loc=0.0190 spac=0.0002
+qty.mesh loc=0.0200 spac=0.0001
+qty.mesh loc=0.0210 spac=0.0002
+qty.mesh loc=0.0250 spac=0.0010
+qty.mesh loc=0.0390 spac=0.0002
+qty.mesh loc=0.0400 spac=0.0001
+qty.mesh loc=0.0410 spac=0.0002
+qty.mesh loc=0.0450 spac=0.0010
+
+REGION NUM=1 NAME=SRC_GaSb    MATERIAL=GaSb   Y.MIN=0.003 Y.MAX=0.020 X.MIN=0 X.MAX=0.005
+REGION NUM=2 NAME=CH_InAs     MATERIAL=InAs   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0 X.MAX=0.005
+REGION NUM=3 NAME=DRN_InGaAs  MATERIAL=InGaAs Y.MIN=0.040 Y.MAX=0.057 X.MIN=0 X.MAX=0.005
+REGION NUM=4 NAME=GATE_OX     MATERIAL=HfO2   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.005 X.MAX=0.007
+REGION NUM=5 MATERIAL=Air Y.MIN=0.000 Y.MAX=0.020 X.MIN=0.005 X.MAX=0.009
+REGION NUM=6 MATERIAL=Air Y.MIN=0.040 Y.MAX=0.060 X.MIN=0.005 X.MAX=0.009
+
+ELECTRODE NAME=SOURCE MATERIAL=Aluminum Y.MIN=0.000 Y.MAX=0.003 X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=DRAIN  MATERIAL=Aluminum Y.MIN=0.057 Y.MAX=0.060 X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=GATE   MATERIAL=Aluminum Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.007 X.MAX=0.009
+
+DOPING GAUSSIAN MATERIAL=GaSb   P.TYPE CONCENTRATION=$doping_src Y.MIN=0.003 Y.MAX=0.020 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
+DOPING UNIFORM  MATERIAL=InAs   N.TYPE CONCENTRATION=$doping_ch  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
+# 5 nm LDD spacer at channel-drain (kept from local-Hurkx version to
+# suppress drain-side ambipolar; non-local BBT already handles this
+# physically, but the LDD reduces field magnitude regardless).
+DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.045 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=0.002 X.CHAR=0
+
+# Material cards for NON-LOCAL BTBT.
+# me.tunnel and mh.tunnel are the effective masses for the WKB
+# transmission integral. CRITICAL CHANGE FROM LOCAL VERSION:
+#   GaSb mh.tunnel: 0.40 (heavy hole) -> 0.05 (light hole).
+# For BTBT the light hole channel dominates because the WKB transmission
+# scales as exp(-sqrt(m)*d). Heavy hole would suppress BTBT by a factor
+# of exp(-1.83*sqrt(d)). Local Hurkx ignored masses entirely (used the
+# bbt.a/bbt.b empirical constants), so this didn't matter before.
+#
+# bbt.a / bbt.b removed from material cards - only consulted by local
+# Hurkx, ignored by non-local.
+material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
+  me.tunnel=0.023 mh.tunnel=0.026 \
+  mun=20000 mup=500 taun0=1e-7 taup0=1e-7 vsatn=4.0e7 vsatp=4.0e7
+
+material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 \
+  me.tunnel=0.039 mh.tunnel=0.05 \
+  mun=3000 mup=1000 taun0=1e-7 taup0=1e-7 vsatn=7.0e6 vsatp=7.0e6
+
+material material=InGaAs permittivity=13.90 eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
+  me.tunnel=0.041 mh.tunnel=0.050 \
+  mun=12000 mup=300 taun0=1e-7 taup0=1e-7 vsatn=2.5e7 vsatp=2.5e7
+
+material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
+
+contact name=SOURCE
+contact name=DRAIN
+contact name=GATE workfunc=$gate_wf
+
+interface x.min=0.005 x.max=0.005 y.min=0.020 y.max=0.040 s.n=5e2 s.p=5e2
+
+output band.temp band.param qfn qfp j.electron j.hole j.total con.band val.band e.mobility e.field u.bbt u.srh u.aug flowlines
+
+# ===== MODELS =====
+# bbt.nonlocal   : non-local WKB BTBT (the proper physics for heterojunctions)
+# bbt.forward    : enable forward-bias BTBT (TFET ON state requires this)
+# qtunn.dir=ydir : *** REQUIRED *** - tells ATLAS to integrate the WKB
+#                  transmission along the Y axis (axial direction:
+#                  source -> channel -> drain). Without this, every
+#                  prior attempt failed with "QT mesh not fine enough".
+# bgn / conmob   : bandgap narrowing + concentration-dependent mobility,
+#                  match Code 8's reference recipe
+models bbt.nonlocal bbt.forward qtunn.dir=ydir fermi srh auger fldmob conmob bgn temperature=300 print
+
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.05
+
+# ===== STAGE A: equilibrium + drain ramp to 0.5 V =====
+solve init
+save outfile=gaa_iiiv_hj_tfet_nl_eq.str
+
+solve name=DRAIN vdrain=0.0  vstep=0.05 vfinal=0.5
+save outfile=gaa_iiiv_hj_tfet_nl_vd05.str
+
+# ===== STAGE B: transfer curve Id-Vg at V_DS = 0.5 V =====
+# Ramp V_G from 0 down to -1.0 V (no log) to reach the start point
+# of the swept range, then sweep up through V_T to 1.5 V.
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-1.0
+
+log outfile=gaa_iiiv_hj_tfet_nl_idvg.log master
+solve name=GATE vgate=-1.0 vstep=0.025 vfinal=1.5
+log off
+
+save outfile=gaa_iiiv_hj_tfet_nl_on.str
+
+tonyplot gaa_iiiv_hj_tfet_nl_idvg.log
+tonyplot -st gaa_iiiv_hj_tfet_nl_idvg.log -set log10y
+
+# Extract V_T (max-slope x-intercept) and SS (1/max-slope of log10|Id|).
+extract init infile="gaa_iiiv_hj_tfet_nl_idvg.log"
+extract name="V_T_n_TFET"  xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+extract name="SS_mVdec"    1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+
+# ===== STAGE C: output family Id-Vd at V_GS = depends on observed V_T =====
+# Defaults same as the local-Hurkx version (1.1, 1.3, 1.5 V). If the
+# non-local model gives a much lower V_T (sub-volt, as expected for a
+# proper TFET), the user can re-run Stage C with smaller V_G values.
+method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.01
+
+solve name=GATE vgate=1.5 vstep=-0.025 vfinal=1.1
+solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
+log outfile=gaa_iiiv_hj_tfet_nl_idvd_vg11.log master
+solve name=DRAIN vdrain=0.0   vstep=0.005 vfinal=0.05
+solve name=DRAIN vdrain=0.05  vstep=0.025 vfinal=0.5
+log off
+
+solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
+solve name=GATE  vgate=1.1 vstep=0.025 vfinal=1.3
+log outfile=gaa_iiiv_hj_tfet_nl_idvd_vg13.log master
+solve name=DRAIN vdrain=0.0   vstep=0.005 vfinal=0.05
+solve name=DRAIN vdrain=0.05  vstep=0.025 vfinal=0.5
+log off
+
+solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
+solve name=GATE  vgate=1.3 vstep=0.025 vfinal=1.5
+log outfile=gaa_iiiv_hj_tfet_nl_idvd_vg15.log master
+solve name=DRAIN vdrain=0.0   vstep=0.005 vfinal=0.05
+solve name=DRAIN vdrain=0.05  vstep=0.025 vfinal=0.5
+log off
+
+tonyplot -overlay gaa_iiiv_hj_tfet_nl_idvd_vg11.log gaa_iiiv_hj_tfet_nl_idvd_vg13.log gaa_iiiv_hj_tfet_nl_idvd_vg15.log
+
+quit
