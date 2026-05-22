@@ -195,52 +195,79 @@ specified separately in the upgraded deck.
 
 ## 6. Numerical method
 
-**Selected:** `gummel newton autonr trap maxtrap=30 climit=1e-5 dvmax=0.05`
+**Two method statements, one per stage of physics:**
 
-- `gummel newton`: Gummel iterations on the equilibrium solve before
-  switching to Newton. Critical when BTBT generation is on - Newton
-  alone has no good initial guess for the BTBT term.
-- `autonr`: automatic Newton-Raphson damping; usually halves the number
-  of failed bias points.
-- `trap maxtrap=30`: bias-step bisection on Newton failure. 30 trap
-  levels is generous; lower numbers fail more often near threshold.
-- `climit=1e-5`: tighter than the original `1e-4`. The Id ramp at low
-  V_GS has currents in the fA/um range, and 1e-4 was actually polluting
-  the off-state.
-- `dvmax=0.05`: cap the per-Newton-step potential update at 50 mV.
-  Going from 0.5 V to 0.05 V was the difference between Newton wandering
-  (residuals oscillating around 0.889 V cap) and Newton converging on
-  this broken-gap deck.
+| Stage | Models | `method` line |
+|-------|--------|---------------|
+| A (DD only) | `fermi srh auger fldmob` | `gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5` |
+| B,C,D,E (BTBT on) | `+bbt.nonlocal +tat.nonlocal` | `newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.05` |
+
+The Stage A method may use Gummel because DD has no non-local terms.
+
+**Stage B onward MUST drop the `gummel` keyword.** ATLAS 2019 errors out
+immediately with `Need to specify NEWTON or BLOCK method to use
+BBT.NONLOCAL model` if `gummel` appears in the method line while
+BBT.NONLOCAL is enabled. The reason is structural: Gummel decouples the
+electron and hole continuity equations, but BBT.NONLOCAL contributes
+off-diagonal Jacobian terms (the `BBT.NLDERIVS` flag exists precisely
+because those terms are essential), so it must run inside the carrier-
+coupled Newton solver.
+
+- `newton autonr trap`: carrier-coupled Newton with auto-NR damping and
+  bias-step bisection on failure.
+- `maxtrap=30`: 30 levels of bisection. Generous; lower numbers fail
+  more often near threshold.
+- `climit=1e-5`: tighter than ATLAS default `1e-4`. The off-state Id
+  is in the fA/um range and looser tolerances pollute it.
+- `dvmax=0.05`: cap per-Newton-step potential update at 50 mV. Helps
+  damping near the BTBT onset.
 
 ## 7. Solve sequence
 
-**This is the most important section in the document.** The original
-deck failed because it tried to find a BTBT-aware equilibrium at zero
-bias. Broken-gap GaSb/InAs has E_V(GaSb) ~114 meV above E_C(InAs); the
-zero-bias BTBT current is therefore not zero, and Newton cannot find
-a self-consistent equilibrium that balances BTBT generation against
-SRH+Auger recombination from a DD-only initial guess.
+**This is the most important section in the document.** The deck never
+solves a BTBT-aware equilibrium. The math behind that decision:
 
-The reliable sequence is:
+```
+  E_V(GaSb)             = -chi - Eg = -4.06 - 0.726 = -4.786 eV
+  E_C(InAs)             = -chi      = -4.900 eV
+  E_V(GaSb) - E_C(InAs) = +0.114 eV    (Type-III broken-gap)
 
-1. **DD-only equilibrium.** `solve init` with `fermi srh auger fldmob`.
-2. **Switch on BBT.NONLOCAL** (no TAT yet).
-3. **Apply a 1 mV drain bias.** This breaks the broken-gap symmetry.
-4. **Ramp the drain in escalating steps**: 0.001 -> 0.002 V steps to
-   0.01 V, then 0.01 V steps to 0.05 V, then 0.05 V steps to 0.5 V.
-5. **Now switch on TAT.NONLOCAL** and `solve prev`. The carrier
-   distribution is now well-defined and the non-local TAT integrator
-   has a sensible WKB path to follow.
-6. **Sweep the gate** from 0 to 1.5 V at 25 mV steps with `log master`.
-7. For Id-Vd: from the Id-Vg endpoint, walk the gate back down to the
-   target V_GS, zero the drain, and ramp drain again. This is faster
-   than re-solving from `solve init` for each V_GS.
+  E_F(GaSb p+, 5e19) ~= E_V(GaSb)   = -4.786 eV
+  E_F(InGaAs n+,5e19)~= E_C(InGaAs) = -4.500 eV
+  V_bi               ~= 0.286 V across source/drain
+```
 
-Lifetimes are also relaxed from `taun0=taup0=1e-9 s` to `1e-7 s`.
-1 ns is shorter than the measured InAs/GaSb minority-carrier lifetime
-and made the zero-bias broken-gap equilibrium artificially stiff (BTBT
-generation had to be balanced by very fast SRH recombination). 100 ns
-is the typical literature value and is what the deck now uses.
+E_V(GaSb) is 114 meV ABOVE E_C(InAs). The barrier height between the
+GaSb VB and the InAs CB at the metallurgical junction is therefore
+*negative* at zero bias, which makes the WKB transmission integral
+sign-indefinite. ATLAS reports this as `Code 2 in
+GetTransmissionProbability` and Newton diverges from any DD-only
+initial guess. There is also already a 0.286 V built-in tilt across
+the device.
+
+The reliable sequence we use:
+
+1. **Stage A.** DD-only `solve init`, then DD-only drain ramp from 0
+   to V_DS = 0.5 V. DD physics is unconditionally well-conditioned
+   at any bias.
+2. **Stage B.** Now turn on `BBT.NONLOCAL` + `BBT.NLDERIVS`,
+   `method newton` (no Gummel), `solve prev` at V_DS = 0.5 V. The
+   bands are tilted by V_bi + V_DS ~ 0.79 V, the BTBT direction is
+   unambiguous (forward at the source), and Newton sees BTBT as a
+   small perturbation.
+3. **Stage C.** Add `TAT.NONLOCAL`, `solve prev` again. The carrier
+   distribution is settled, so the non-local TAT integrator has a
+   sensible WKB path.
+4. **Stage D.** Sweep gate 0 -> 1.5 V at 25 mV steps under
+   `log master`.
+5. **Stage E.** For Id-Vd at V_GS = 0.5, 1.0, 1.5 V: from the Id-Vg
+   endpoint, walk drain DOWN to 0 V in small steps, walk gate to the
+   target V_GS, then sweep drain.
+
+Lifetimes are relaxed from `taun0 = taup0 = 1e-9 s` to `1e-7 s`.
+The shorter value made the broken-gap equilibrium artificially stiff
+(BTBT generation balanced by very fast SRH recombination); 100 ns is
+the typical InAs/GaSb literature value.
 
 ## 8. What is **not** in this deck (and why)
 
