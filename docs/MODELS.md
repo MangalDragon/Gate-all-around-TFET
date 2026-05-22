@@ -346,6 +346,69 @@ loads the saved structure file and writes axial and radial band-
 edge cutlines so the broken-gap alignment can be verified visually
 in tonyplot.
 
+### Final confirmation from the exported cross-section data
+
+A tonyplot cross-section export of the saved post-NEGF structure at
+V_D = 0.5 V (`gaa_iiiv_hj_tfet_negf_btbt_vd05.str`, axial cutline,
+212 sample points) was used to read the band edges directly. In the
+simulation's energy reference (Fermi level = 0 at the source), the
+key values are:
+
+| y (um)  | Material | E_V (eV) | E_C (eV) |
+|---------|----------|----------|----------|
+| 0.01024 | GaSb     | +0.0683  | +0.7943  |
+| 0.01890 | GaSb     | +0.131   | +0.858   |
+| 0.01904 | InAs     | -0.327   | +0.0272  |
+| 0.03000 | InAs     | -0.483   | -0.131   |
+
+Two broken-gap tests:
+
+  Junction overlap = E_V(GaSb, y=0.0189) - E_C(InAs, y=0.0190)
+                   = +0.131 - +0.027  = +0.104 eV
+  Bulk-to-bulk     = E_V(GaSb, y=0.010) - E_C(InAs, y=0.030)
+                   = +0.068 - (-0.131) = +0.199 eV
+
+Both are positive. The flat-band overlap expected from the
+affinities (chi(GaSb)=4.06, chi(InAs)=4.90) and bandgap (Eg(GaSb)=
+0.726) is +0.114 eV; the simulated junction value of +0.104 eV
+agrees to within 10 meV, with the extra ~85 meV in the bulk-to-bulk
+number coming from degenerate p+ source doping pulling the GaSb VB
+up and gate-induced bending pulling the InAs CB down.
+
+This closes the investigation. Three independent indicators all
+say the same thing:
+
+1. Id-Vg curve oscillates symmetrically around zero at the 10^-21 A
+   noise floor -> NEGF returned T(E) ~ 0 across the junction.
+2. The .str saved at the end of NEGF Stage B contains no carrier
+   solution and no self-consistent Poisson potential -> NEGF's
+   internal arrays were never copied into DD n/p, consistent with
+   zero transmission.
+3. The .dat cross-section export confirms the structure has the
+   expected broken-gap alignment with +104 meV overlap at the
+   junction and +199 meV bulk-to-bulk -> the structure was built
+   correctly, the physics input is correct, the missing piece is
+   purely the off-diagonal CB-VB matrix element that effective-mass
+   single-band NEGF mode-space does not have.
+
+### Recommendation
+
+Lock in `simulations/gaa_iiiv_hj_tfet.in` (local-Hurkx + BQP) as
+the production deck for this device on this license. In the
+methodology section, cite Carrillo-Nunez et al. 2017
+([arXiv:1705.00909](https://arxiv.org/abs/1705.00909)) as the
+canonical study of exactly this device family that used atomistic
+tight-binding mode-space NEGF to match Esaki diode and HTFET
+measurements -- that paper establishes that effective-mass NEGF in
+commercial TCAD is insufficient for true broken-gap BTBT, which
+gives full license to use the local-Hurkx-plus-BQP approach
+calibrated against literature.
+
+Keep `simulations/gaa_iiiv_hj_tfet_negf.in` and the diagnostic
+deck in the repository as documented record of the NEGF attempt
+and as the correct starting point if a Victory Atomistic / Nemo5
+license becomes available.
+
 If a "make NEGF produce numbers" path is still wanted, the only
 cheap option is a Type-II shift kludge: raise chi(GaSb) from 4.06
 to ~4.65 eV. That converts the simulated junction from broken-gap
