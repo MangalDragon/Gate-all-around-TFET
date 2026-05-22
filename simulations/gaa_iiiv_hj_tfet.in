@@ -23,18 +23,39 @@ go atlas simflags="-P 4"
 # qualitatively correct TFET Id-Vg curve.
 #
 # Calibration of this version:
-#   - BBT.HURKX with bbt.a x10 and bbt.b /4.75 vs textbook III-V Kane
+#   - BBT.HURKX with bbt.a x10 and bbt.b ~/5x vs textbook III-V Kane
 #     values, fitted to broken-gap GaSb/InAs measurements
 #     (Mookerjea 2010, Avci 2015). The smaller B (4e6 V/cm vs textbook
 #     1.9e7) accounts for the broken-gap reduction of the WKB barrier
 #     that the local model cannot see from the affinities alone.
-#   - gate_wf = 4.35 eV: this is the correct midgap workfunction for
-#     this device. With gate_wf < InAs affinity (4.90 eV) the channel
-#     is already accumulated at V_G=0 and the I-V curve INVERTS
-#     (we tried gate_wf=4.10 in the previous iteration and got
-#     I_OFF=89 pA, I_ON=2 pA, which is the inverted polarity).
-#     With 4.35 eV, V_T sits inside the 0.3-0.8 V range and the curve
-#     has the correct n-TFET polarity.
+#
+#   - gate_wf = 5.20 eV. CRITICAL: the right reference for "midgap" on
+#     this device is NOT silicon-midgap (4.6 eV). The InAs intrinsic
+#     Fermi level sits at:
+#         Phi_i(InAs) = chi + Eg/2 = 4.90 + 0.177 = 5.08 eV
+#     so any gate workfunction below 5.08 eV will leave the InAs
+#     channel ACCUMULATED at V_G=0. Combined with the broken-gap
+#     alignment (E_V(GaSb)=-4.786 eV is 0.114 eV ABOVE E_C(InAs)=-4.90
+#     eV), this means BTBT is ALREADY enabled at V_G=0 and any
+#     positive V_G further accumulates the channel without enhancing
+#     BTBT - giving an inverted (anti-TFET) Id-Vg.
+#     Earlier attempts:
+#         WF=4.10 eV -> I_OFF=89 pA, I_ON=2 pA  (deeply inverted)
+#         WF=4.35 eV -> still inverted, I_ON ~ 5 pA  (still wrong)
+#     Setting WF = 5.20 eV puts the channel into slight depletion at
+#     V_G=0 (delta_phi = +0.12 V vs Phi_i), so V_T sits at roughly
+#     +0.1 to +0.3 V and the device is OFF at V_G=0. Increasing V_G
+#     pulls the InAs surface CB back below the GaSb VB and switches
+#     BTBT on - the correct n-TFET behavior. WF=5.20 eV is realistic
+#     for a Ni or TiN gate stack on HfO2.
+#
+#   - Ychar = 0.001 (was 0.003): tighter Gaussian tail on source/drain
+#     doping for an abrupter tunnel junction. BTBT generation scales
+#     exponentially with junction abruptness, so this matters more
+#     than +/- 20% in bbt.a.
+#
+#   - V_G sweep extended to -1.0 V so the ambipolar branch (drain-side
+#     BTBT under negative gate) is visible alongside the main turn-on.
 
 set Lg = 0.020
 set R = 0.005
@@ -44,8 +65,8 @@ set Lds = 0.020
 set doping_src = 5e19
 set doping_drn = 5e19
 set doping_ch = 1e15
-set gate_wf = 4.35
-set Ychar = 0.003
+set gate_wf = 5.20
+set Ychar = 0.001
 
 MESH CYLINDRICAL
 
@@ -147,31 +168,47 @@ solve prev
 save outfile=gaa_iiiv_hj_tfet_btbt_vd05.str
 
 # ===== STAGE C: transfer curve Id-Vg at V_DS = 0.5 V =====
+# Sweep V_G from -1.0 to +1.5 V to show the full transfer including
+# the ambipolar (drain-side BTBT) branch at negative V_G.
+# First ramp V_G down from 0 to -1.0 V (no log) so the Newton solver
+# has a smooth initial-guess trajectory.
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-1.0
+
 log outfile=gaa_iiiv_hj_tfet_idvg.log master
-solve name=GATE vgate=0.0 vstep=0.025 vfinal=1.5
+solve name=GATE vgate=-1.0 vstep=0.025 vfinal=1.5
 log off
 
 save outfile=gaa_iiiv_hj_tfet_on.str
 tonyplot gaa_iiiv_hj_tfet_idvg.log
 
 # ===== STAGE D: output family Id-Vd at V_GS = 0.5, 1.0, 1.5 V =====
+# Tighter solver tolerances for the Id-Vd sweeps (the Newton trap can
+# spike near V_D=0 if the previous bias point was far from this one).
+method newton autonr trap maxtrap=50 itlimit=100 climit=1e-5 dvmax=0.02
+
+# Bring V_G back to the first output-family operating point (0.5 V).
+# Ramping V_G in fine steps avoids the negative-current convergence
+# artifact at V_D=0 that we saw in the previous run.
+solve name=GATE vgate=1.5 vstep=-0.025 vfinal=0.5
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
 
-solve name=GATE vgate=1.5 vstep=-0.05 vfinal=0.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg05.log master
-solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
+solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
+solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-solve name=GATE vgate=0.5 vstep=0.05 vfinal=1.0
+solve name=GATE  vgate=0.5 vstep=0.025 vfinal=1.0
 log outfile=gaa_iiiv_hj_tfet_idvd_vg10.log master
-solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
+solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
+solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 solve name=DRAIN vdrain=0.5 vstep=-0.025 vfinal=0.0
-solve name=GATE vgate=1.0 vstep=0.05 vfinal=1.5
+solve name=GATE  vgate=1.0 vstep=0.025 vfinal=1.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg15.log master
-solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
+solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
+solve name=DRAIN vdrain=0.05 vstep=0.025 vfinal=0.5
 log off
 
 tonyplot -overlay gaa_iiiv_hj_tfet_idvd_vg05.log gaa_iiiv_hj_tfet_idvd_vg10.log gaa_iiiv_hj_tfet_idvd_vg15.log
