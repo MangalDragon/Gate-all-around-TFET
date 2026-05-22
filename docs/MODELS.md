@@ -197,3 +197,84 @@ This is the single biggest reliability fix versus the original deck.
 | Phonon-limited mobility tables (`KLA`)| III-V tables not standard in ATLAS 2019; constant + fldmob is preferable. |
 | Gate leakage (`FNORD`, direct tunnel) | HfO2 thickness 2 nm is borderline; can be added later if leakage matters. |
 | Self-heating                          | Single-V_DS sweep up to 0.5 V; thermal effect <1% in this device.         |
+
+
+## 9. NEGF Mode-Space - the broken-gap-correct upgrade
+
+**Deck:** `simulations/gaa_iiiv_hj_tfet_negf.in`
+**Selected:** `NEGF_MS SCHRODINGER EIGEN=8 ESIZE.NEGF=200 NPRED.NEGF=10`
+
+Why we needed an upgrade beyond the local-Hurkx baseline. The
+non-local WKB integrator (`BBT.NONLOCAL`) evaluates the transmission
+
+    T(E) ~ exp(-2 * integral sqrt(2 m (V(x) - E) / hbar^2) dx)
+
+which assumes a forbidden barrier `V(x) - E > 0` along the tunnel path.
+For the Type-III GaSb/InAs broken-gap junction the radicand goes
+negative (E_V of GaSb sits above E_C of InAs), so ATLAS aborts. NEGF
+solves the retarded Green's function
+
+    G^R(E) = [E*I - H - Sigma^R(E)]^(-1)
+    T(E)   = Tr(Gamma_S * G^R * Gamma_D * G^A)
+
+with no barrier assumption, so it works for any band alignment. This is
+why NEGF is the physically correct tool for this device and BBT is not.
+
+Required model flags and what each one does:
+- `NEGF_MS` : mode-space NEGF, lets ATLAS auto-pick coupled (CMS) vs
+  uncoupled (UMS) modes. For broken-gap with band mixing, force `NEGF_CMS`
+  if you observe the auto-pick choosing UMS and currents look too low.
+- `SCHRODINGER` : transverse sub-band solve at each axial slice, required
+  by `NEGF_MS`. ATLAS auto-detects geometry; on this cylindrical mesh it
+  selects the 1DX solver, which is correct for a nanowire cross-section.
+- `EIGEN=8` : keep 8 sub-bands per valley. Adequate for a 5 nm radius
+  wire; raise to 12-16 if results look quantization-limited.
+- `ESIZE.NEGF=200` : 200 energy grid points. Default may be too coarse
+  for the sharp BTBT onset; raise to 400 if Id-Vg looks step-like.
+- `NPRED.NEGF=10` : 10 predictor-corrector iterations between Poisson
+  and NEGF (default 7). More predictors help when the two are far from
+  self-consistent.
+
+The mandatory `carriers=0` requirement. NEGF computes electron and hole
+densities itself from the spectral function
+
+    n(r,E) = -(i / 2pi) * [G^< - G^>]
+
+so the standard DD continuity equations are redundant and conflict with
+it. Running `carriers=2` (the default) alongside NEGF causes ATLAS to
+abort with
+
+    Error in NEGF.
+    Set CARRIERS to 0 on the METHOD statement and try again.
+
+The fix is `carriers=0` on every `method` statement issued *after*
+NEGF is enabled. This turns off only the continuity solve; Poisson is
+still solved and couples to the NEGF charge self-consistently. Stage A
+(pure DD ramp to V_D = 0.5 V used as the initial guess for NEGF) keeps
+the default `carriers=2` because that stage genuinely needs continuity.
+
+Effective masses used by NEGF / Schrodinger. ATLAS uses its built-in
+band-edge masses `mc`, `mhh`, `mlh` (auto-populated from the material
+database), not `me.tunnel` / `mh.tunnel`. The values printed by the
+solver were checked against literature:
+
+| Material  | mc      | mlh     | mhh    |
+|-----------|---------|---------|--------|
+| GaSb      | 0.039   | 0.05    | 0.28   |
+| InAs      | 0.026   | 0.025   | 0.57   |
+| In0.53Ga0.47As | 0.0412 | 0.051 | 0.46 |
+
+Trade-offs vs the local-Hurkx baseline:
+- Pros : proper quantum transport, no Kane fitting, handles broken-gap
+  natively (so we keep physical chi=4.06, no Type-II shift kludge),
+  captures sub-band quantization in the 5 nm wire, and the I_ON should
+  reach the realistic uA range reported in Avci 2015.
+- Cons : slow (NEGF inverts `(E*I - H - Sigma)` at every energy point at
+  every Newton iteration, expect hours per run); convergence may need
+  tuning of `NPRED.NEGF` / `ESIZE.NEGF`; effective-mass NEGF is
+  single-band, so for publication-grade broken-gap physics k.p or
+  full-band atomistic is still preferable.
+
+Fallback if NEGF stays too slow: `DD_MS` - drift-diffusion mode-space.
+Same Schrodinger sub-bands but classical transport along the wire,
+much cheaper than full Green's-function inversion.
