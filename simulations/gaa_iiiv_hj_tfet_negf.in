@@ -1,56 +1,62 @@
 go atlas simflags="-P 4"
 
-#-----------------------------------------------------------------------------
-# Gate-All-Around III-V Heterojunction TFET - NEGF Mode-Space version
+# Gate-All-Around III-V Heterojunction TFET - NEGF MODE-SPACE VERSION
 # Source : GaSb  (p+, broken-gap, PHYSICAL chi=4.06)
 # Channel: InAs  (n-, intrinsic)
 # Drain  : InGaAs (n+, In0.53Ga0.47As)
 # Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
-#-----------------------------------------------------------------------------
 #
-# WHAT WE LEARNED FROM THE PREVIOUS RUN (Sat May 23 02:45):
-#   - Stage A (DD ramp to V_D=0.5 V) converged cleanly: I_D = 1.72e-14 A.
-#   - ATLAS auto-detected cylindrical geometry and selected the 1DX
-#     Schrodinger solver, which is correct for a nanowire cross-section.
-#   - The band-edge masses ATLAS used for Schrodinger / NEGF (visible in
-#     the run log) match accepted literature values:
-#         Material  mc        mlh         mhh
-#         GaSb      0.039     0.05        0.28
-#         InAs      0.026     0.025       0.57
-#         InGaAs    0.0412    0.051       0.46
-#     Our me.tunnel/mh.tunnel cards are accepted but ATLAS uses its
-#     built-in mc/mhh/mlh for Schrodinger and NEGF, which is what we want.
-#   - NEGF aborted at the first self-consistent step with the message:
-#         "Error in NEGF. Set CARRIERS to 0 on the METHOD statement
-#          and try again."
+# I owe the user another correction: I claimed NEGF was unavailable in
+# ATLAS 2019 and that NEGF-grade physics required Nemo5/OMEN/Sentaurus.
+# The user pointed out that QUANTUM is enabled in their license (as
+# their initial license output confirmed) and provided the manual
+# section for NEGF_MS, NEGF_CMS, NEGF_UMS, NEGF_PL1D, NEGF_PL.
 #
-# THE FIX (the ONLY functional change vs the prior NEGF deck):
-#     carriers=0 on the Stage B and Stage C METHOD statements.
+# This is the right tool for this device. Mode-Space NEGF was designed
+# for exactly this case: cylindrical nanowire with strong transverse
+# confinement. Avci 2015 used the same methodology to simulate the
+# GaSb/InAs/InGaAs broken-gap GAA TFET we are modeling.
 #
-#   NEGF computes electron and hole densities itself from the spectral
-#   function   n(r,E) = -(i/2pi) [G^< - G^>]
-#   so the standard DD continuity equations (carriers=2, the default)
-#   conflict with it. carriers=0 turns OFF only the continuity solve;
-#   Poisson is still solved, and it couples to the NEGF charge
-#   self-consistently. Stage A stays at the default (carriers=2) because
-#   that stage is pure DD and needs the continuity equations.
+# Why NEGF solves the broken-gap problem that BBT.NONLOCAL could not:
+#   BBT.NONLOCAL evaluates the WKB transmission
+#       T(E) ~ exp(-2 integral sqrt(2m(V(x)-E)/hbar^2) dx)
+#   which requires a forbidden barrier V(x)-E > 0 along the path.
+#   For Type-III broken gap (E_V(GaSb) > E_C(InAs)), the radicand goes
+#   negative and ATLAS throws Code 2.
 #
-# NOTEBOOK FALLBACK TABLE (confirmed against this attempt):
-#     BBT.NONLOCAL     - WKB fails on Type-III broken gap
-#     SCHENK.BBT       - Si phonon-assisted, not for direct-gap III-V
-#     BBT.KL/KANE/STD  - Local, same limit as Hurkx baseline
-#     TAT.NONLOCAL     - Removed during cleanup; can revisit on Hurkx deck
-#     TRAP.TUNNEL      - Active in working local-Hurkx baseline
-#     NEGF_MS/PL1D     - This deck (only blocker was carriers=0)
-#     DD_MS            - Cheaper fallback if NEGF is too slow
-#     BQP.N/BQP.P      - Already in Hurkx baseline, not stacked on NEGF
-#     DGLOG            - Equivalent alternative to BQP (not used)
+#   NEGF solves directly:
+#       G^R(E) = [E*I - H - Sigma^R(E)]^(-1)
+#       T(E)   = Tr(Gamma_S G^R Gamma_D G^A)
+#   No barrier assumption. Works for any band alignment, including
+#   broken gap. This is the physically-correct treatment.
 #
-# IF THIS RUN STILL FAILS / IS TOO SLOW:
-#     Drop back to gaa_iiiv_hj_tfet.in (verified local-Hurkx baseline,
-#     V_T = 1.07 V, SS = 102 mV/dec, I_ON = 2.34 pA), or replace
-#     `negf_ms` here with `dd_ms` for a much cheaper sub-band run.
-#-----------------------------------------------------------------------------
+# Trade-offs vs the local-Hurkx baseline (gaa_iiiv_hj_tfet.in):
+#   Pros:
+#     - Proper quantum transport, no empirical bbt.a/bbt.b fitting
+#     - Handles broken-gap (no band-shift kludge needed -> chi=4.06)
+#     - Captures sub-band quantization in the 5 nm nanowire
+#     - I_ON should reach the realistic uA range (Avci 2015 territory)
+#     - Sub-thermal SS is achievable (no thermal-tail floor like
+#       drift-diffusion + Hurkx)
+#   Cons:
+#     - SLOW. NEGF inverts (E*I - H - Sigma) at each energy point at
+#       every Newton iteration. Expect HOURS per run, not minutes.
+#     - May not converge first try. Predictor-corrector iterations
+#       (NPRED.NEGF) and energy grid (ESIZE.NEGF) may need tuning.
+#     - Effective-mass NEGF is single-band; for true broken-gap
+#       quantum mechanics you ideally want k.p or full-band atomistic
+#       (Nemo5/OMEN). NEGF_MS in ATLAS gets you closer than BBT but
+#       not all the way to publication-grade.
+#
+# Strategy:
+#   Stage A: DD-only, ramp V_D to 0.5 V (provides initial guess).
+#   Stage B: enable NEGF_MS at V_D=0.5 V, solve self-consistent.
+#   Stage C: V_G sweep with NEGF on, log Id-Vg.
+#   Stage D: Id-Vd family (deferred; can be added once Stage C works).
+#
+# IF NEGF DOES NOT CONVERGE OR IS TOO SLOW:
+#   The local-Hurkx deck (gaa_iiiv_hj_tfet.in) remains our verified
+#   working baseline at V_T=1.07 V, SS=102 mV/dec, I_ON=2.34 pA.
 
 set Lg = 0.020
 set R = 0.005
@@ -63,14 +69,10 @@ set doping_ch = 1e15
 set gate_wf = 5.20
 set Ychar = 0.001
 
-# Physical broken-gap alignment (no Type-II shift kludge).
-# NEGF handles Type-III natively; the WKB integrator could not.
+# PHYSICAL band alignment - no kludge needed for NEGF.
+# The Type-III broken-gap junction is what NEGF handles natively.
 set gasb_chi = 4.06
 
-#-----------------------------------------------------------------------------
-# Mesh - cylindrical, no QTX/QTY (NEGF uses the regular mesh; energy
-# grid is internal and controlled by ESIZE.NEGF below).
-#-----------------------------------------------------------------------------
 MESH CYLINDRICAL
 
 X.MESH loc=0.000   spacing=0.0010
@@ -99,6 +101,12 @@ Y.MESH loc=0.043   spacing=0.0005
 Y.MESH loc=0.057   spacing=0.001
 Y.MESH loc=0.060   spacing=0.005
 
+# NEGF does NOT use the qtx.mesh / qty.mesh that BBT.NONLOCAL uses.
+# Schrodinger sub-band calculation uses the regular X.MESH for the
+# transverse direction. NEGF transport calculation uses the regular
+# Y.MESH for the axial direction. The energy grid is internal to NEGF
+# (controlled by ESIZE.NEGF on the models statement).
+
 REGION NUM=1 NAME=SRC_GaSb    MATERIAL=GaSb   Y.MIN=0.003 Y.MAX=0.020 X.MIN=0 X.MAX=0.005
 REGION NUM=2 NAME=CH_InAs     MATERIAL=InAs   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0 X.MAX=0.005
 REGION NUM=3 NAME=DRN_InGaAs  MATERIAL=InGaAs Y.MIN=0.040 Y.MAX=0.057 X.MIN=0 X.MAX=0.005
@@ -114,23 +122,22 @@ DOPING GAUSSIAN MATERIAL=GaSb   P.TYPE CONCENTRATION=$doping_src Y.MIN=0.003 Y.M
 DOPING UNIFORM  MATERIAL=InAs   N.TYPE CONCENTRATION=$doping_ch  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
 DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.045 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=0.002 X.CHAR=0
 
-#-----------------------------------------------------------------------------
-# Materials
-# me.tunnel / mh.tunnel are kept (they avoid the "ambiguous parameter"
-# error that bare me=/mh= produced in earlier iterations). NEGF and
-# Schrodinger ignore them and use the built-in mc/mhh/mlh, which the
-# previous run log confirmed are correct.
-#-----------------------------------------------------------------------------
+# Material cards. CRITICAL for NEGF:
+#   - PHYSICAL band alignment (no Type-II kludge): GaSb chi=4.06
+#   - Effective masses (me, mh) drive the Schrodinger sub-band calc.
+#     These are the BAND-EDGE masses, distinct from me.tunnel/mh.tunnel
+#     used by the local BBT models.
+#   - GaSb mh = 0.05 (light hole, dominates BTBT) not 0.40 (heavy).
 material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
-  me.tunnel=0.023 mh.tunnel=0.026 \
+  me=0.023 mh=0.026 \
   mun=20000 mup=500 taun0=1e-7 taup0=1e-7
 
 material material=GaSb   permittivity=15.70 eg300=0.726 affinity=$gasb_chi nc300=2.0e17 nv300=1.3e19 \
-  me.tunnel=0.039 mh.tunnel=0.05 \
+  me=0.039 mh=0.05 \
   mun=3000 mup=1000 taun0=1e-7 taup0=1e-7
 
 material material=InGaAs permittivity=13.90 eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
-  me.tunnel=0.041 mh.tunnel=0.050 \
+  me=0.041 mh=0.050 \
   mun=12000 mup=300 taun0=1e-7 taup0=1e-7
 
 material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
@@ -141,13 +148,10 @@ contact name=GATE workfunc=$gate_wf
 
 interface x.min=0.005 x.max=0.005 y.min=0.020 y.max=0.040 s.n=5e2 s.p=5e2
 
-output band.param qfn qfp j.electron j.hole j.total con.band val.band e.field flowlines
+output band.temp band.param qfn qfp j.electron j.hole j.total con.band val.band e.mobility e.field flowlines
 
-#=============================================================================
-# STAGE A : DD only, ramp V_D to 0.5 V (initial guess for NEGF)
-#   carriers default = 2 (electron + hole continuity equations on).
-#   bgn included for accuracy in heavily-doped source/drain.
-#=============================================================================
+# ===== STAGE A: DD only, ramp V_D to 0.5 V =====
+# DD provides the self-consistent initial guess for NEGF.
 models fermi srh auger fldmob conmob bgn temperature=300 print
 method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
 
@@ -157,27 +161,34 @@ save outfile=gaa_iiiv_hj_tfet_negf_eq.str
 solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
 save outfile=gaa_iiiv_hj_tfet_negf_dd_vd05.str
 
-#=============================================================================
-# STAGE B : enable NEGF Mode-Space at V_D = 0.5 V
-#   *** carriers=0 is THE FIX for the previous run's abort. ***
-#   NEGF replaces continuity; Poisson still couples self-consistently.
-#=============================================================================
+# ===== STAGE B: enable NEGF Mode-Space at V_D=0.5 V =====
+# NEGF_MS      : Mode-Space NEGF, lets ATLAS auto-pick CMS vs UMS.
+#                For broken-gap with band mixing, it should select CMS.
+#                If ATLAS sticks with UMS and currents are too low,
+#                replace NEGF_MS with NEGF_CMS to force coupled modes.
+# SCHRODINGER  : compute the transverse sub-bands at each axial slice
+#                (required by NEGF_MS).
+# EIGEN=8      : keep 8 sub-bands per valley. For 5 nm radius nanowire
+#                this captures the lowest few transport modes adequately.
+#                Increase to 12-16 if results look quantization-limited.
+# ESIZE.NEGF=200 : 200 energy grid points. Default may be too coarse
+#                for the sharp BTBT onset; 200 is a reasonable starting
+#                point. Increase to 400 if the Id-Vg looks step-like.
+# NPRED.NEGF=10: 10 predictor iterations (default 7). More predictors
+#                help when Poisson and NEGF are far from self-consistent.
 models negf_ms schrodinger eigen=8 esize.negf=200 npred.negf=10 \
-       fermi srh auger conmob temperature=300 print
+       fermi srh auger conmob bgn temperature=300 print
 
-method newton autonr trap maxtrap=20 itlimit=80 climit=1e-5 dvmax=0.05 \
-       carriers=0
+method newton autonr trap maxtrap=20 itlimit=80 climit=1e-5 dvmax=0.05
 
 solve prev
 save outfile=gaa_iiiv_hj_tfet_negf_btbt_vd05.str
 
-#=============================================================================
-# STAGE C : transfer curve Id-Vg at V_DS = 0.5 V (NEGF stays active,
-# carriers=0 carries forward to keep continuity off).
-#=============================================================================
-method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.1 \
-       carriers=0
-
+# ===== STAGE C: transfer curve Id-Vg at V_DS = 0.5 V =====
+# Tighter V_G range than the BBT versions: NEGF is slow, so we limit
+# the sweep to -0.5 to +1.0 V (60 points). With NEGF predicting a
+# proper V_T near 0.3-0.5 V, this range covers I_OFF -> I_ON cleanly.
+# Extend later if needed.
 solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
 
 log outfile=gaa_iiiv_hj_tfet_negf_idvg.log master
@@ -189,8 +200,16 @@ save outfile=gaa_iiiv_hj_tfet_negf_on.str
 tonyplot gaa_iiiv_hj_tfet_negf_idvg.log
 tonyplot -st gaa_iiiv_hj_tfet_negf_idvg.log -set log10y
 
+# Extract V_T (max-slope x-intercept) and SS (1/max-slope of log10|Id|).
 extract init infile="gaa_iiiv_hj_tfet_negf_idvg.log"
 extract name="V_T_n_TFET_NEGF" xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
 extract name="SS_NEGF_mVdec"   1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+
+# ===== STAGE D: deferred =====
+# Id-Vd family is intentionally NOT included on the first NEGF run.
+# Each I-V point under NEGF takes 10-100x longer than under DD; running
+# 3 full Id-Vd sweeps on top of the Id-Vg would push the total runtime
+# into many hours. Once Stage C converges and you confirm a sensible
+# Id-Vg, add Stage D in a follow-up commit.
 
 quit
