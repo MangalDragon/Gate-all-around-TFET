@@ -93,28 +93,58 @@ References:
 
 ## 3. Quantum confinement - V_T correction in 5 nm wires
 
-**Selected:** `BQP.N BQP.P` (Bohm Quantum Potential)
+**Selected:** *not* enabled. V_T calibration is delegated to gate
+workfunction. The reasoning below explains why.
 
 For R = 5 nm (10 nm diameter), the lowest InAs sub-band is shifted
 ~150-250 meV above bulk E_c. A drift-diffusion deck without quantum
 correction therefore predicts V_T much too low and I_ON much too high.
 
-The Bohm Quantum Potential model is the recommended quantum correction
-in ATLAS for two reasons (per the Silvaco BQP application note):
-1. Two calibration parameters (gamma, alpha) per carrier - more
-   flexibility than density-gradient's single knob.
-2. Numerically stable, decoupled from the choice of transport model
-   (drift-diffusion or hydrodynamic).
+The natural ATLAS quantum correction is the **Bohm Quantum Potential**
+(`BQP.N BQP.P`). It is recommended over `DGLOG` (density gradient) by
+the Silvaco BQP application note for nanowires.
 
-Default starting values: `gamma.n = gamma.p = 1.4`, `alpha.n = alpha.p =
-0.3`. These were calibrated against Schroedinger-Poisson for silicon
-nanowires and reproduce the InAs nanowire first-sub-band shift to within
-~20 meV. For final calibration, fit `gamma`/`alpha` to either an
-atomistic (NEMO/Victory Atomistic) reference or to a published ETB
-calculation for the same diameter.
+**ATLAS 2019 caveat: BQP cannot be combined with BBT.NONLOCAL on the
+same solve.** Two failure modes occur in this 5.28.1.R build:
 
-Alternative: `DGLOG` (Density Gradient). The ATLAS BQP note explicitly
-recommends BQP over DG for nanowires.
+1. *Method conflict.* Activating `BQP.N`/`BQP.P` triggers
+   `Must specify BLOCK for Bohm Quantum Potential`,
+   `Setting solution method to BLOCK`. Any subsequent `method newton`
+   is silently overridden.
+2. *Block-iteration divergence.* When the BLOCK iteration carries the
+   BQPn/BQPp auxiliary unknowns *and* the BTBT generation rate, the
+   non-linear residuals grow rather than shrink. The solver then
+   aborts with a misleading `Need to specify NEWTON or BLOCK method
+   to use BBT.NONLOCAL model` error - the real cause is divergence.
+
+The standard published TFET decks (including Silvaco's own simulation-
+standard examples) handle this by **not combining BQP with BTBT**.
+Instead, V_T is anchored by tuning the gate workfunction (or a fixed
+interface charge). Both knobs shift V_T monotonically and are easier
+to calibrate against measured or atomistic-reference data than the BQP
+gamma/alpha pair.
+
+The deck exposes `set gate_wf = 4.35` for that purpose. As a guideline:
+
+| Target V_T shift | Δ workfunc to apply |
+|------------------|---------------------|
+| +100 mV          | +0.10 eV            |
+| +200 mV          | +0.20 eV            |
+
+(In the 100-300 meV range it is approximately 1:1 because the gate is
+wrapped on a thin wire.)
+
+**Alternative if you need true confinement-aware Id-Vg:** ATLAS BQP
+*does* compose with BBT.NONLOCAL if you do an explicit warm-start
+sequence:
+
+1. Solve equilibrium DD only.
+2. Turn on BQP only, `method block`, solve to convergence.
+3. Turn on BBT.NONLOCAL+TAT.NONLOCAL on top, with BQP still on.
+4. Use `method block carriers=2` (some 2019 patch levels accept this).
+
+In practice that recipe is brittle on R=5 nm cylindrical wires; we keep
+it documented as a fallback rather than as the default.
 
 For ultimate accuracy in sub-10 nm wires, the next step is NEGF mode-
 space (`NEGF_MS`) or full Victory Atomistic (`NEGF_PL1D`). Both are
