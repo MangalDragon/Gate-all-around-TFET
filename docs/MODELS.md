@@ -28,7 +28,10 @@ spatial-band-edge effect.
 defined by `QTX.MESH` / `QTY.MESH`. The mesh must enclose the source/
 channel junction with sub-nm spacing in the tunneling direction. In
 this deck Y=0.020 is the junction and we have `SPACING=0.0001` (= 0.1 nm)
-across it.
+across it. *Going below 0.1 nm is counter-productive*: in the previous
+revision we tried 50 pm and the WKB integrator started returning Code 2
+warnings (over-discretization). 0.1 nm with 0.2 nm transition zones
+matches Silvaco's own GAA TFET examples.
 
 `BBT.NLDERIVS` is a numerical option, not a physics one: it tells the
 solver to keep the analytic Jacobian of the BTBT generation rate with
@@ -63,7 +66,8 @@ References:
 
 ## 2. Trap-assisted tunneling (TAT) - the SS floor
 
-**Selected:** `TAT.NONLOCAL`
+**Selected:** `TAT.NONLOCAL` - but turned on **after** the operating
+point is established, not at zero bias.
 
 TAT is the dominant subthreshold leakage mechanism in real III-V TFETs.
 It is the field-enhanced phonon-assisted emission of carriers from
@@ -75,6 +79,20 @@ any measured TFET (30-80 mV/dec).
 non-local BTBT, evaluates the WKB transmission probability for emission
 from a trap at energy E_T to the band edge, and scales the local SRH
 recombination rate accordingly.
+
+**Why TAT is staged after BTBT.** For a broken-gap heterojunction, the
+zero-bias equilibrium has E_V(GaSb) ~114 meV above E_C(InAs). At that
+configuration the TAT WKB integrator can hit invalid energy ranges and
+emit `Code 2 in GetTransmissionProbability` warnings; layered on top of
+the broken-gap BTBT current, Newton then fails to find a self-consistent
+zero-bias equilibrium. Empirically the cleanest path is:
+
+1. DD-only equilibrium.
+2. Add `BBT.NONLOCAL`, ramp drain to operating bias (V_DS = 0.5 V).
+3. Now add `TAT.NONLOCAL` and `solve prev`.
+4. Run the gate sweep.
+
+This is what `simulations/gaa_iiiv_hj_tfet.in` does (sections 9, 10, 11).
 
 Local fallback: `TRAP.TUNNEL` modifies the SRH lifetimes by a Hurkx-style
 field enhancement factor. Less accurate but cheaper and does not require
@@ -93,28 +111,46 @@ References:
 
 ## 3. Quantum confinement - V_T correction in 5 nm wires
 
-**Selected:** `BQP.N BQP.P` (Bohm Quantum Potential)
+**Selected:** *not* enabled. V_T calibration is delegated to gate
+workfunction. The reasoning below explains why.
 
 For R = 5 nm (10 nm diameter), the lowest InAs sub-band is shifted
 ~150-250 meV above bulk E_c. A drift-diffusion deck without quantum
 correction therefore predicts V_T much too low and I_ON much too high.
 
-The Bohm Quantum Potential model is the recommended quantum correction
-in ATLAS for two reasons (per the Silvaco BQP application note):
-1. Two calibration parameters (gamma, alpha) per carrier - more
-   flexibility than density-gradient's single knob.
-2. Numerically stable, decoupled from the choice of transport model
-   (drift-diffusion or hydrodynamic).
+The natural ATLAS quantum correction is the **Bohm Quantum Potential**
+(`BQP.N BQP.P`). It is recommended over `DGLOG` (density gradient) by
+the Silvaco BQP application note for nanowires.
 
-Default starting values: `gamma.n = gamma.p = 1.4`, `alpha.n = alpha.p =
-0.3`. These were calibrated against Schroedinger-Poisson for silicon
-nanowires and reproduce the InAs nanowire first-sub-band shift to within
-~20 meV. For final calibration, fit `gamma`/`alpha` to either an
-atomistic (NEMO/Victory Atomistic) reference or to a published ETB
-calculation for the same diameter.
+**ATLAS 2019 caveat: BQP cannot be combined with BBT.NONLOCAL on the
+same solve.** Two failure modes occur in this 5.28.1.R build:
 
-Alternative: `DGLOG` (Density Gradient). The ATLAS BQP note explicitly
-recommends BQP over DG for nanowires.
+1. *Method conflict.* Activating `BQP.N`/`BQP.P` triggers
+   `Must specify BLOCK for Bohm Quantum Potential`,
+   `Setting solution method to BLOCK`. Any subsequent `method newton`
+   is silently overridden.
+2. *Block-iteration divergence.* When the BLOCK iteration carries the
+   BQPn/BQPp auxiliary unknowns *and* the BTBT generation rate, the
+   non-linear residuals grow rather than shrink. The solver then
+   aborts with a misleading `Need to specify NEWTON or BLOCK method
+   to use BBT.NONLOCAL model` error - the real cause is divergence.
+
+The standard published TFET decks (including Silvaco's own simulation-
+standard examples) handle this by **not combining BQP with BTBT**.
+Instead, V_T is anchored by tuning the gate workfunction (or a fixed
+interface charge). Both knobs shift V_T monotonically and are easier
+to calibrate against measured or atomistic-reference data than the BQP
+gamma/alpha pair.
+
+The deck exposes `set gate_wf = 4.35` for that purpose. As a guideline:
+
+| Target V_T shift | Delta workfunc to apply |
+|------------------|-------------------------|
+| +100 mV          | +0.10 eV                |
+| +200 mV          | +0.20 eV                |
+
+(In the 100-300 meV range it is approximately 1:1 because the gate is
+wrapped on a thin wire.)
 
 For ultimate accuracy in sub-10 nm wires, the next step is NEGF mode-
 space (`NEGF_MS`) or full Victory Atomistic (`NEGF_PL1D`). Both are
@@ -159,7 +195,7 @@ specified separately in the upgraded deck.
 
 ## 6. Numerical method
 
-**Selected:** `gummel newton autonr trap maxtrap=30 climit=1e-5 dvmax=0.2`
+**Selected:** `gummel newton autonr trap maxtrap=30 climit=1e-5 dvmax=0.05`
 
 - `gummel newton`: Gummel iterations on the equilibrium solve before
   switching to Newton. Critical when BTBT generation is on - Newton
@@ -171,21 +207,40 @@ specified separately in the upgraded deck.
 - `climit=1e-5`: tighter than the original `1e-4`. The Id ramp at low
   V_GS has currents in the fA/um range, and 1e-4 was actually polluting
   the off-state.
-- `dvmax=0.2`: cap the per-Newton-step potential update at 0.2 V; helps
-  damping near the BTBT onset.
+- `dvmax=0.05`: cap the per-Newton-step potential update at 50 mV.
+  Going from 0.5 V to 0.05 V was the difference between Newton wandering
+  (residuals oscillating around 0.889 V cap) and Newton converging on
+  this broken-gap deck.
 
 ## 7. Solve sequence
 
-The solve sequence is a *physics warm-start*:
+**This is the most important section in the document.** The original
+deck failed because it tried to find a BTBT-aware equilibrium at zero
+bias. Broken-gap GaSb/InAs has E_V(GaSb) ~114 meV above E_C(InAs); the
+zero-bias BTBT current is therefore not zero, and Newton cannot find
+a self-consistent equilibrium that balances BTBT generation against
+SRH+Auger recombination from a DD-only initial guess.
 
-1. Equilibrium solve with **drift-diffusion only** (no BTBT/TAT/BQP).
-2. Re-issue `models` with full physics; `solve prev` warm-starts.
-3. Save the full-physics equilibrium structure.
-4. Drain ramp in two stages (10 mV / 50 mV).
-5. Gate ramp at 25 mV / step under `log master`.
-6. Reload equilibrium and run Id-Vd at three V_GS values.
+The reliable sequence is:
 
-This is the single biggest reliability fix versus the original deck.
+1. **DD-only equilibrium.** `solve init` with `fermi srh auger fldmob`.
+2. **Switch on BBT.NONLOCAL** (no TAT yet).
+3. **Apply a 1 mV drain bias.** This breaks the broken-gap symmetry.
+4. **Ramp the drain in escalating steps**: 0.001 -> 0.002 V steps to
+   0.01 V, then 0.01 V steps to 0.05 V, then 0.05 V steps to 0.5 V.
+5. **Now switch on TAT.NONLOCAL** and `solve prev`. The carrier
+   distribution is now well-defined and the non-local TAT integrator
+   has a sensible WKB path to follow.
+6. **Sweep the gate** from 0 to 1.5 V at 25 mV steps with `log master`.
+7. For Id-Vd: from the Id-Vg endpoint, walk the gate back down to the
+   target V_GS, zero the drain, and ramp drain again. This is faster
+   than re-solving from `solve init` for each V_GS.
+
+Lifetimes are also relaxed from `taun0=taup0=1e-9 s` to `1e-7 s`.
+1 ns is shorter than the measured InAs/GaSb minority-carrier lifetime
+and made the zero-bias broken-gap equilibrium artificially stiff (BTBT
+generation had to be balanced by very fast SRH recombination). 100 ns
+is the typical literature value and is what the deck now uses.
 
 ## 8. What is **not** in this deck (and why)
 

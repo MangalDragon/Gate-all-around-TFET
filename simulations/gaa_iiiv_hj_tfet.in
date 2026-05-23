@@ -5,7 +5,9 @@
 # Drain  : InGaAs(n+, In0.53Ga0.47As)
 # Geometry: Cylindrical, R = 5 nm, Lg = 20 nm, t_OX(HfO2) = 2 nm
 #
-# Physics: BBT.NONLOCAL + TAT.NONLOCAL + BQP (Bohm) + Fermi-Dirac
+# Physics: BBT.NONLOCAL (always on) + TAT.NONLOCAL (turned on AFTER the
+#          operating point is established, to avoid the WKB integrator
+#          choking at the zero-bias broken-gap equilibrium)
 # Target : transfer (Id-Vg @ Vd=0.5) and output (Id-Vd @ Vg=0.5,1.0,1.5)
 #
 # Reference targets at Vd = 0.5 V, room T:
@@ -25,6 +27,9 @@ set Lds        = 0.020
 set doping_src = 5e19
 set doping_drn = 5e19
 set doping_ch  = 1e15
+# Gate WF: 4.35 eV is a good first guess for n-type TFET. To shift V_T,
+# raise this towards 4.5-4.6 eV (V_T moves up). Functionally equivalent
+# to a BQP confinement shift for transfer-curve work.
 set gate_wf    = 4.35
 set Ychar      = 0.003
 
@@ -47,10 +52,13 @@ X.MESH loc=0.009   spacing=0.0010
 # and across drain/channel junction (Y=0.040)
 Y.MESH loc=0.000   spacing=0.005
 Y.MESH loc=0.003   spacing=0.001
-Y.MESH loc=0.017   spacing=0.0005
+Y.MESH loc=0.015   spacing=0.0005
+Y.MESH loc=0.018   spacing=0.0002
 Y.MESH loc=0.0195  spacing=0.0001
 Y.MESH loc=0.020   spacing=0.0001     # source/channel tunnel junction
-Y.MESH loc=0.025   spacing=0.0010
+Y.MESH loc=0.0205  spacing=0.0001
+Y.MESH loc=0.022   spacing=0.0002
+Y.MESH loc=0.025   spacing=0.0005
 Y.MESH loc=0.030   spacing=0.0010
 Y.MESH loc=0.035   spacing=0.0010
 Y.MESH loc=0.0395  spacing=0.0001
@@ -60,14 +68,20 @@ Y.MESH loc=0.057   spacing=0.001
 Y.MESH loc=0.060   spacing=0.005
 
 #-- Non-local BTBT/TAT mesh, ONLY at the source/channel tunnel junction ------
-# Limiting QTREGION to the source side avoids drain-side ambipolar BTBT
-# being captured into the same non-local mesh.
-QTX.MESH LOC=0.000 SPACING=0.001
-QTX.MESH LOC=0.005 SPACING=0.001
+# Width: ~16 nm window centred on the junction.
+# Spacing: 0.1 nm at the junction. The previous 50 pm version produced
+# many stray "Code 2" WKB warnings because the integrator
+# over-discretized; 0.1 nm with 0.2 nm transitions matches Silvaco's
+# own GAA TFET examples.
+QTX.MESH LOC=0.000  SPACING=0.0005
+QTX.MESH LOC=0.0025 SPACING=0.0005
+QTX.MESH LOC=0.005  SPACING=0.0005
 
-QTY.MESH LOC=0.015 SPACING=0.0005
-QTY.MESH LOC=0.020 SPACING=0.0001
-QTY.MESH LOC=0.025 SPACING=0.0005
+QTY.MESH LOC=0.012  SPACING=0.001
+QTY.MESH LOC=0.017  SPACING=0.0002
+QTY.MESH LOC=0.020  SPACING=0.0001    # 0.1 nm at the junction
+QTY.MESH LOC=0.023  SPACING=0.0002
+QTY.MESH LOC=0.028  SPACING=0.001
 
 #-----------------------------------------------------------------------------
 # 2. REGIONS
@@ -120,9 +134,13 @@ DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn \
 # 5. MATERIALS
 #    Reference: Vurgaftman 2001 (band parameters), Bahuguna 2017 / Avci 2015
 #    (tunneling masses), Mookerjea 2010 (broken-gap GaSb/InAs alignment).
-#    NOTE: bbt.a / bbt.b are LOCAL Kane parameters and are inert when
-#    BBT.NONLOCAL is selected. They are NOT included here on purpose.
-#    The non-local model uses me.tunnel / mh.tunnel + Eg + affinity.
+#
+#    NOTE on lifetimes: taun0/taup0 are intentionally LONG (1e-7 s)
+#    rather than the original 1e-9 s. The shorter value makes the
+#    zero-bias broken-gap equilibrium very stiff (BTBT generation must
+#    be balanced by very fast SRH recombination) and was the immediate
+#    cause of the Newton failure in the previous run. 1e-7 s is a
+#    typical InAs/GaSb minority-carrier lifetime in the literature.
 #-----------------------------------------------------------------------------
 material material=InAs              \
   permittivity=15.15                \
@@ -130,7 +148,7 @@ material material=InAs              \
   nc300=8.7e16   nv300=6.6e18       \
   me.tunnel=0.023 mh.tunnel=0.026   \
   mun=20000      mup=500            \
-  taun0=1e-9     taup0=1e-9         \
+  taun0=1e-7     taup0=1e-7         \
   vsatn=4.0e7    vsatp=4.0e7
 
 material material=GaSb              \
@@ -139,7 +157,7 @@ material material=GaSb              \
   nc300=2.0e17   nv300=1.3e19       \
   me.tunnel=0.039 mh.tunnel=0.40    \
   mun=3000       mup=1000           \
-  taun0=1e-9     taup0=1e-9         \
+  taun0=1e-7     taup0=1e-7         \
   vsatn=7.0e6    vsatp=7.0e6
 
 material material=InGaAs            \
@@ -148,7 +166,7 @@ material material=InGaAs            \
   nc300=2.1e17   nv300=7.7e18       \
   me.tunnel=0.041 mh.tunnel=0.050   \
   mun=12000      mup=300            \
-  taun0=1e-9     taup0=1e-9         \
+  taun0=1e-7     taup0=1e-7         \
   vsatn=2.5e7    vsatp=2.5e7
 
 # HfO2: high-k gate dielectric. eps_r ~ 21-25 typical.
@@ -164,17 +182,15 @@ contact name=GATE workfunc=$gate_wf
 #-----------------------------------------------------------------------------
 # 7. INTERFACE TRAPS (HfO2 / InAs)
 #    Surface recombination + finite Dit-equivalent surface velocity drives
-#    the realistic SS-floor through TAT.NONLOCAL (next section).
+#    the realistic SS-floor through TAT.NONLOCAL once it's enabled below.
 #-----------------------------------------------------------------------------
 interface x.min=0.005 x.max=0.005 \
           y.min=0.020 y.max=0.040 \
           s.n=5e2 s.p=5e2
 
 #-----------------------------------------------------------------------------
-# 8. PHYSICS MODELS
-#    See docs/MODELS.md for the rationale per flag.
+# 8. STAGE A: equilibrium-friendly model set (no tunneling generation yet)
 #-----------------------------------------------------------------------------
-# Stage A: equilibrium-friendly model set (no tunneling generation yet)
 models                              \
   fermi                             \
   srh auger                         \
@@ -182,10 +198,6 @@ models                              \
   temperature=300                   \
   print
 
-#-----------------------------------------------------------------------------
-# 9. NUMERICAL METHOD (robust path)
-#    Gummel for the first few solves, then full Newton with AUTONR.
-#-----------------------------------------------------------------------------
 method gummel newton autonr trap maxtrap=10 \
        itlimit=50 climit=1e-5 dvmax=0.5
 
@@ -198,50 +210,69 @@ output band.temp band.param  \
   u.bbt u.srh u.aug          \
   flowlines
 
-#-----------------------------------------------------------------------------
-# 10. EQUILIBRIUM SOLVE (drift-diffusion only, no BTBT yet)
-#-----------------------------------------------------------------------------
 solve init
 save outfile=gaa_iiiv_hj_tfet_eq_DD.str
 
 #-----------------------------------------------------------------------------
-# 11. TURN ON FULL TFET PHYSICS
-#     - BBT.NONLOCAL  : non-local interband tunneling on QTX/QTY mesh
-#     - BBT.NLDERIVS  : Jacobian terms of G_BTBT (essential for Newton)
-#     - TAT.NONLOCAL  : non-local trap-assisted tunneling
-#     - BQP.N / BQP.P : Bohm Quantum Potential -> sub-band shift in 5 nm wire
+# 9. STAGE B: turn on BBT.NONLOCAL only (TAT.NONLOCAL deferred)
+#
+#    The previous run aborted because Newton could not find a zero-bias
+#    equilibrium that includes the broken-gap GaSb -> InAs interband
+#    tunnel current AND the non-local trap-assisted tunnel current.
+#    The fix is two-fold:
+#      (a) Do NOT re-solve equilibrium with BTBT on. Skip "solve prev".
+#          Instead apply a tiny drain bias (1 mV) which breaks the
+#          broken-gap symmetry and gives Newton a finite, well-defined
+#          operating point to converge on.
+#      (b) Keep TAT.NONLOCAL OFF during the initial drain ramp - the
+#          "Code 2 in GetTransmissionProbability" warnings come from
+#          its WKB integrator running into invalid energy ranges at
+#          near-zero bias.
 #-----------------------------------------------------------------------------
 models                              \
   bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
   fermi                             \
   srh auger                         \
   fldmob                            \
   temperature=300                   \
   print
 
-# BQP calibration constants (Silvaco BQP note: gamma=1.4, alpha=0.3 fits Si
-# Schroedinger-Poisson; for InAs nanowire similar values reproduce the
-# 1st sub-band shift to within ~20 meV. Treat as a fit knob if you have
-# atomistic reference data.)
-material material=InAs   gamma.n=1.4  alpha.n=0.3  gamma.p=1.4  alpha.p=0.3
-material material=GaSb   gamma.n=1.4  alpha.n=0.3  gamma.p=1.4  alpha.p=0.3
-material material=InGaAs gamma.n=1.4  alpha.n=0.3  gamma.p=1.4  alpha.p=0.3
+method gummel newton autonr trap maxtrap=30 \
+       itlimit=100 climit=1e-5 dvmax=0.05
 
-method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+#-----------------------------------------------------------------------------
+# 10. DRAIN RAMP - very small first step to break broken-gap equilibrium
+#-----------------------------------------------------------------------------
+solve name=DRAIN vdrain=0.001
+solve name=DRAIN vdrain=0.001 vstep=0.002 vfinal=0.01
+solve name=DRAIN vstep=0.01 vfinal=0.05
+solve name=DRAIN vstep=0.05 vfinal=0.50
 
-# warm-start with full physics
+save outfile=gaa_iiiv_hj_tfet_op_vd05.str
+
+#-----------------------------------------------------------------------------
+# 11. STAGE C: now turn on TAT.NONLOCAL on top of the established
+#     operating point. Carrier distributions are well-defined here so
+#     the non-local TAT integrator has a sensible WKB path to follow.
+#-----------------------------------------------------------------------------
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  fermi                             \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+
+method newton autonr trap maxtrap=30 \
+       itlimit=100 climit=1e-5 dvmax=0.05
+
 solve prev
-save outfile=gaa_iiiv_hj_tfet_eq.str
+save outfile=gaa_iiiv_hj_tfet_op_full.str
 
 #-----------------------------------------------------------------------------
-# 12. TRANSFER CURVE: Id-Vg at Vd = 0.5 V
+# 12. TRANSFER CURVE: Id-Vg at Vd = 0.5 V (full physics)
 #-----------------------------------------------------------------------------
-# Ramp drain first (small steps near zero, larger after)
-solve name=DRAIN vdrain=0.0 vstep=0.01  vfinal=0.05
-solve name=DRAIN vdrain=0.05 vstep=0.05 vfinal=0.50
-
 log outfile=gaa_iiiv_hj_tfet_idvg.log master
 solve name=GATE  vgate=0.0  vstep=0.025 vfinal=1.5
 log off
@@ -251,14 +282,15 @@ tonyplot gaa_iiiv_hj_tfet_idvg.log
 
 #-----------------------------------------------------------------------------
 # 13. OUTPUT FAMILY: Id-Vd at Vg = 0.5, 1.0, 1.5 V
+#     We DON'T go via "solve init" again (which would lose the BTBT
+#     models); instead we walk gate down/up to each target VGS while
+#     keeping VD pinned, then sweep VD.
 #-----------------------------------------------------------------------------
-# reset to the full-physics equilibrium
-solve init
-solve prev
+# zero out drain
+solve name=DRAIN vdrain=0.0
 
 # --- Vg = 0.5 V ------------------------------------------------------------
-solve name=GATE  vgate=0.0 vstep=0.05 vfinal=0.5
-solve name=DRAIN vdrain=0.0
+solve name=GATE  vgate=1.5 vstep=-0.05 vfinal=0.5
 log outfile=gaa_iiiv_hj_tfet_idvd_vg05.log master
 solve name=DRAIN vdrain=0.0 vstep=0.025 vfinal=0.5
 log off

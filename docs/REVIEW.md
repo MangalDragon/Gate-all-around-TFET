@@ -51,9 +51,12 @@ InAs has m_e* = 0.023; in a 10 nm-diameter wire the lowest sub-band sits
 ~150-250 meV above bulk Ec. A pure drift-diffusion deck pretends the wire
 is bulk and therefore predicts V_T much too low and I_ON much too high.
 
-**Fix:** added `BQP.N` and `BQP.P` (Bohm Quantum Potential), with the
-calibrated gamma = 1.4 / alpha = 0.3 from the Silvaco BQP application
-note as a starting point for III-V channels.
+**Fix:** V_T is anchored by tuning the gate work-function (`set gate_wf`).
+BQP is *not* combined with BBT.NONLOCAL because in ATLAS 2019 that
+combination forces method=BLOCK and the BLOCK iteration of
+BBT.NONLOCAL+BQP diverges (residuals grow each step). See
+`docs/MODELS.md` section 3 for the full discussion and the workaround
+recipe if you need true BQP-aware V_T.
 
 ### 4. Silicon-flavored mobility / BGN
 
