@@ -129,15 +129,15 @@ DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn Y.MIN=0.045 Y.M
 #     used by the local BBT models.
 #   - GaSb mh = 0.05 (light hole, dominates BTBT) not 0.40 (heavy).
 material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
-  me=0.023 mh=0.026 \
+  me.tunnel=0.023 mh.tunnel=0.026 \
   mun=20000 mup=500 taun0=1e-7 taup0=1e-7
 
 material material=GaSb   permittivity=15.70 eg300=0.726 affinity=$gasb_chi nc300=2.0e17 nv300=1.3e19 \
-  me=0.039 mh=0.05 \
+  me.tunnel=0.039 mh.tunnel=0.05 \
   mun=3000 mup=1000 taun0=1e-7 taup0=1e-7
 
 material material=InGaAs permittivity=13.90 eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
-  me=0.041 mh=0.050 \
+  me.tunnel=0.041 mh.tunnel=0.050 \
   mun=12000 mup=300 taun0=1e-7 taup0=1e-7
 
 material material=HfO2 permittivity=22.0 eg300=5.7 affinity=2.05
@@ -179,7 +179,7 @@ save outfile=gaa_iiiv_hj_tfet_negf_dd_vd05.str
 models negf_ms schrodinger eigen=8 esize.negf=200 npred.negf=10 \
        fermi srh auger conmob bgn temperature=300 print
 
-method newton autonr trap maxtrap=20 itlimit=80 climit=1e-5 dvmax=0.05
+method newton autonr trap maxtrap=20 itlimit=80 climit=1e-5 dvmax=0.05 carriers=0
 
 solve prev
 save outfile=gaa_iiiv_hj_tfet_negf_btbt_vd05.str
