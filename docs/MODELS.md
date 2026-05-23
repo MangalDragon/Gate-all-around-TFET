@@ -28,7 +28,10 @@ spatial-band-edge effect.
 defined by `QTX.MESH` / `QTY.MESH`. The mesh must enclose the source/
 channel junction with sub-nm spacing in the tunneling direction. In
 this deck Y=0.020 is the junction and we have `SPACING=0.0001` (= 0.1 nm)
-across it.
+across it. *Going below 0.1 nm is counter-productive*: in the previous
+revision we tried 50 pm and the WKB integrator started returning Code 2
+warnings (over-discretization). 0.1 nm with 0.2 nm transition zones
+matches Silvaco's own GAA TFET examples.
 
 `BBT.NLDERIVS` is a numerical option, not a physics one: it tells the
 solver to keep the analytic Jacobian of the BTBT generation rate with
@@ -63,7 +66,8 @@ References:
 
 ## 2. Trap-assisted tunneling (TAT) - the SS floor
 
-**Selected:** `TAT.NONLOCAL`
+**Selected:** `TAT.NONLOCAL` - but turned on **after** the operating
+point is established, not at zero bias.
 
 TAT is the dominant subthreshold leakage mechanism in real III-V TFETs.
 It is the field-enhanced phonon-assisted emission of carriers from
@@ -75,6 +79,20 @@ any measured TFET (30-80 mV/dec).
 non-local BTBT, evaluates the WKB transmission probability for emission
 from a trap at energy E_T to the band edge, and scales the local SRH
 recombination rate accordingly.
+
+**Why TAT is staged after BTBT.** For a broken-gap heterojunction, the
+zero-bias equilibrium has E_V(GaSb) ~114 meV above E_C(InAs). At that
+configuration the TAT WKB integrator can hit invalid energy ranges and
+emit `Code 2 in GetTransmissionProbability` warnings; layered on top of
+the broken-gap BTBT current, Newton then fails to find a self-consistent
+zero-bias equilibrium. Empirically the cleanest path is:
+
+1. DD-only equilibrium.
+2. Add `BBT.NONLOCAL`, ramp drain to operating bias (V_DS = 0.5 V).
+3. Now add `TAT.NONLOCAL` and `solve prev`.
+4. Run the gate sweep.
+
+This is what `simulations/gaa_iiiv_hj_tfet.in` does (sections 9, 10, 11).
 
 Local fallback: `TRAP.TUNNEL` modifies the SRH lifetimes by a Hurkx-style
 field enhancement factor. Less accurate but cheaper and does not require
@@ -93,28 +111,46 @@ References:
 
 ## 3. Quantum confinement - V_T correction in 5 nm wires
 
-**Selected:** `BQP.N BQP.P` (Bohm Quantum Potential)
+**Selected:** *not* enabled. V_T calibration is delegated to gate
+workfunction. The reasoning below explains why.
 
 For R = 5 nm (10 nm diameter), the lowest InAs sub-band is shifted
 ~150-250 meV above bulk E_c. A drift-diffusion deck without quantum
 correction therefore predicts V_T much too low and I_ON much too high.
 
-The Bohm Quantum Potential model is the recommended quantum correction
-in ATLAS for two reasons (per the Silvaco BQP application note):
-1. Two calibration parameters (gamma, alpha) per carrier - more
-   flexibility than density-gradient's single knob.
-2. Numerically stable, decoupled from the choice of transport model
-   (drift-diffusion or hydrodynamic).
+The natural ATLAS quantum correction is the **Bohm Quantum Potential**
+(`BQP.N BQP.P`). It is recommended over `DGLOG` (density gradient) by
+the Silvaco BQP application note for nanowires.
 
-Default starting values: `gamma.n = gamma.p = 1.4`, `alpha.n = alpha.p =
-0.3`. These were calibrated against Schroedinger-Poisson for silicon
-nanowires and reproduce the InAs nanowire first-sub-band shift to within
-~20 meV. For final calibration, fit `gamma`/`alpha` to either an
-atomistic (NEMO/Victory Atomistic) reference or to a published ETB
-calculation for the same diameter.
+**ATLAS 2019 caveat: BQP cannot be combined with BBT.NONLOCAL on the
+same solve.** Two failure modes occur in this 5.28.1.R build:
 
-Alternative: `DGLOG` (Density Gradient). The ATLAS BQP note explicitly
-recommends BQP over DG for nanowires.
+1. *Method conflict.* Activating `BQP.N`/`BQP.P` triggers
+   `Must specify BLOCK for Bohm Quantum Potential`,
+   `Setting solution method to BLOCK`. Any subsequent `method newton`
+   is silently overridden.
+2. *Block-iteration divergence.* When the BLOCK iteration carries the
+   BQPn/BQPp auxiliary unknowns *and* the BTBT generation rate, the
+   non-linear residuals grow rather than shrink. The solver then
+   aborts with a misleading `Need to specify NEWTON or BLOCK method
+   to use BBT.NONLOCAL model` error - the real cause is divergence.
+
+The standard published TFET decks (including Silvaco's own simulation-
+standard examples) handle this by **not combining BQP with BTBT**.
+Instead, V_T is anchored by tuning the gate workfunction (or a fixed
+interface charge). Both knobs shift V_T monotonically and are easier
+to calibrate against measured or atomistic-reference data than the BQP
+gamma/alpha pair.
+
+The deck exposes `set gate_wf = 4.35` for that purpose. As a guideline:
+
+| Target V_T shift | Delta workfunc to apply |
+|------------------|-------------------------|
+| +100 mV          | +0.10 eV                |
+| +200 mV          | +0.20 eV                |
+
+(In the 100-300 meV range it is approximately 1:1 because the gate is
+wrapped on a thin wire.)
 
 For ultimate accuracy in sub-10 nm wires, the next step is NEGF mode-
 space (`NEGF_MS`) or full Victory Atomistic (`NEGF_PL1D`). Both are
@@ -159,33 +195,79 @@ specified separately in the upgraded deck.
 
 ## 6. Numerical method
 
-**Selected:** `gummel newton autonr trap maxtrap=30 climit=1e-5 dvmax=0.2`
+**Two method statements, one per stage of physics:**
 
-- `gummel newton`: Gummel iterations on the equilibrium solve before
-  switching to Newton. Critical when BTBT generation is on - Newton
-  alone has no good initial guess for the BTBT term.
-- `autonr`: automatic Newton-Raphson damping; usually halves the number
-  of failed bias points.
-- `trap maxtrap=30`: bias-step bisection on Newton failure. 30 trap
-  levels is generous; lower numbers fail more often near threshold.
-- `climit=1e-5`: tighter than the original `1e-4`. The Id ramp at low
-  V_GS has currents in the fA/um range, and 1e-4 was actually polluting
-  the off-state.
-- `dvmax=0.2`: cap the per-Newton-step potential update at 0.2 V; helps
+| Stage | Models | `method` line |
+|-------|--------|---------------|
+| A (DD only) | `fermi srh auger fldmob` | `gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5` |
+| B,C,D,E (BTBT on) | `+bbt.nonlocal +tat.nonlocal` | `newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.05` |
+
+The Stage A method may use Gummel because DD has no non-local terms.
+
+**Stage B onward MUST drop the `gummel` keyword.** ATLAS 2019 errors out
+immediately with `Need to specify NEWTON or BLOCK method to use
+BBT.NONLOCAL model` if `gummel` appears in the method line while
+BBT.NONLOCAL is enabled. The reason is structural: Gummel decouples the
+electron and hole continuity equations, but BBT.NONLOCAL contributes
+off-diagonal Jacobian terms (the `BBT.NLDERIVS` flag exists precisely
+because those terms are essential), so it must run inside the carrier-
+coupled Newton solver.
+
+- `newton autonr trap`: carrier-coupled Newton with auto-NR damping and
+  bias-step bisection on failure.
+- `maxtrap=30`: 30 levels of bisection. Generous; lower numbers fail
+  more often near threshold.
+- `climit=1e-5`: tighter than ATLAS default `1e-4`. The off-state Id
+  is in the fA/um range and looser tolerances pollute it.
+- `dvmax=0.05`: cap per-Newton-step potential update at 50 mV. Helps
   damping near the BTBT onset.
 
 ## 7. Solve sequence
 
-The solve sequence is a *physics warm-start*:
+**This is the most important section in the document.** The deck never
+solves a BTBT-aware equilibrium. The math behind that decision:
 
-1. Equilibrium solve with **drift-diffusion only** (no BTBT/TAT/BQP).
-2. Re-issue `models` with full physics; `solve prev` warm-starts.
-3. Save the full-physics equilibrium structure.
-4. Drain ramp in two stages (10 mV / 50 mV).
-5. Gate ramp at 25 mV / step under `log master`.
-6. Reload equilibrium and run Id-Vd at three V_GS values.
+```
+  E_V(GaSb)             = -chi - Eg = -4.06 - 0.726 = -4.786 eV
+  E_C(InAs)             = -chi      = -4.900 eV
+  E_V(GaSb) - E_C(InAs) = +0.114 eV    (Type-III broken-gap)
 
-This is the single biggest reliability fix versus the original deck.
+  E_F(GaSb p+, 5e19) ~= E_V(GaSb)   = -4.786 eV
+  E_F(InGaAs n+,5e19)~= E_C(InGaAs) = -4.500 eV
+  V_bi               ~= 0.286 V across source/drain
+```
+
+E_V(GaSb) is 114 meV ABOVE E_C(InAs). The barrier height between the
+GaSb VB and the InAs CB at the metallurgical junction is therefore
+*negative* at zero bias, which makes the WKB transmission integral
+sign-indefinite. ATLAS reports this as `Code 2 in
+GetTransmissionProbability` and Newton diverges from any DD-only
+initial guess. There is also already a 0.286 V built-in tilt across
+the device.
+
+The reliable sequence we use:
+
+1. **Stage A.** DD-only `solve init`, then DD-only drain ramp from 0
+   to V_DS = 0.5 V. DD physics is unconditionally well-conditioned
+   at any bias.
+2. **Stage B.** Now turn on `BBT.NONLOCAL` + `BBT.NLDERIVS`,
+   `method newton` (no Gummel), `solve prev` at V_DS = 0.5 V. The
+   bands are tilted by V_bi + V_DS ~ 0.79 V, the BTBT direction is
+   unambiguous (forward at the source), and Newton sees BTBT as a
+   small perturbation.
+3. **Stage C.** Add `TAT.NONLOCAL`, `solve prev` again. The carrier
+   distribution is settled, so the non-local TAT integrator has a
+   sensible WKB path.
+4. **Stage D.** Sweep gate 0 -> 1.5 V at 25 mV steps under
+   `log master`.
+5. **Stage E.** For Id-Vd at V_GS = 0.5, 1.0, 1.5 V: from the Id-Vg
+   endpoint, walk drain DOWN to 0 V in small steps, walk gate to the
+   target V_GS, then sweep drain.
+
+Lifetimes are relaxed from `taun0 = taup0 = 1e-9 s` to `1e-7 s`.
+The shorter value made the broken-gap equilibrium artificially stiff
+(BTBT generation balanced by very fast SRH recombination); 100 ns is
+the typical InAs/GaSb literature value.
 
 ## 8. What is **not** in this deck (and why)
 
@@ -197,3 +279,224 @@ This is the single biggest reliability fix versus the original deck.
 | Phonon-limited mobility tables (`KLA`)| III-V tables not standard in ATLAS 2019; constant + fldmob is preferable. |
 | Gate leakage (`FNORD`, direct tunnel) | HfO2 thickness 2 nm is borderline; can be added later if leakage matters. |
 | Self-heating                          | Single-V_DS sweep up to 0.5 V; thermal effect <1% in this device.         |
+
+
+## 9. NEGF Mode-Space - the broken-gap-correct upgrade
+
+**Deck:** `simulations/gaa_iiiv_hj_tfet_negf.in`
+**Selected:** `NEGF_MS SCHRODINGER EIGEN=8 ESIZE.NEGF=200 NPRED.NEGF=10`
+
+Why we needed an upgrade beyond the local-Hurkx baseline. The
+non-local WKB integrator (`BBT.NONLOCAL`) evaluates the transmission
+
+    T(E) ~ exp(-2 * integral sqrt(2 m (V(x) - E) / hbar^2) dx)
+
+which assumes a forbidden barrier `V(x) - E > 0` along the tunnel path.
+For the Type-III GaSb/InAs broken-gap junction the radicand goes
+negative (E_V of GaSb sits above E_C of InAs), so ATLAS aborts. NEGF
+solves the retarded Green's function
+
+    G^R(E) = [E*I - H - Sigma^R(E)]^(-1)
+    T(E)   = Tr(Gamma_S * G^R * Gamma_D * G^A)
+
+with no barrier assumption, so it works for any band alignment. This is
+why NEGF is the physically correct tool for this device and BBT is not.
+
+Required model flags and what each one does:
+- `NEGF_MS` : mode-space NEGF, lets ATLAS auto-pick coupled (CMS) vs
+  uncoupled (UMS) modes. For broken-gap with band mixing, force `NEGF_CMS`
+  if you observe the auto-pick choosing UMS and currents look too low.
+- `SCHRODINGER` : transverse sub-band solve at each axial slice, required
+  by `NEGF_MS`. ATLAS auto-detects geometry; on this cylindrical mesh it
+  selects the 1DX solver, which is correct for a nanowire cross-section.
+- `EIGEN=8` : keep 8 sub-bands per valley. Adequate for a 5 nm radius
+  wire; raise to 12-16 if results look quantization-limited.
+- `ESIZE.NEGF=200` : 200 energy grid points. Default may be too coarse
+  for the sharp BTBT onset; raise to 400 if Id-Vg looks step-like.
+- `NPRED.NEGF=10` : 10 predictor-corrector iterations between Poisson
+  and NEGF (default 7). More predictors help when the two are far from
+  self-consistent.
+
+The mandatory `carriers=0` requirement. NEGF computes electron and hole
+densities itself from the spectral function
+
+    n(r,E) = -(i / 2pi) * [G^< - G^>]
+
+so the standard DD continuity equations are redundant and conflict with
+it. Running `carriers=2` (the default) alongside NEGF causes ATLAS to
+abort with
+
+    Error in NEGF.
+    Set CARRIERS to 0 on the METHOD statement and try again.
+
+The fix is `carriers=0` on every `method` statement issued *after*
+NEGF is enabled. This turns off only the continuity solve; Poisson is
+still solved and couples to the NEGF charge self-consistently. Stage A
+(pure DD ramp to V_D = 0.5 V used as the initial guess for NEGF) keeps
+the default `carriers=2` because that stage genuinely needs continuity.
+
+Effective masses used by NEGF / Schrodinger. ATLAS uses its built-in
+band-edge masses `mc`, `mhh`, `mlh` (auto-populated from the material
+database), not `me.tunnel` / `mh.tunnel`. The values printed by the
+solver were checked against literature:
+
+| Material  | mc      | mlh     | mhh    |
+|-----------|---------|---------|--------|
+| GaSb      | 0.039   | 0.05    | 0.28   |
+| InAs      | 0.026   | 0.025   | 0.57   |
+| In0.53Ga0.47As | 0.0412 | 0.051 | 0.46 |
+
+Trade-offs vs the local-Hurkx baseline:
+- Pros : proper quantum transport, no Kane fitting, handles broken-gap
+  natively (so we keep physical chi=4.06, no Type-II shift kludge),
+  captures sub-band quantization in the 5 nm wire, and the I_ON should
+  reach the realistic uA range reported in Avci 2015.
+- Cons : slow (NEGF inverts `(E*I - H - Sigma)` at every energy point at
+  every Newton iteration, expect hours per run); convergence may need
+  tuning of `NPRED.NEGF` / `ESIZE.NEGF`; effective-mass NEGF is
+  single-band, so for publication-grade broken-gap physics k.p or
+  full-band atomistic is still preferable.
+
+Fallback if NEGF stays too slow: `DD_MS` - drift-diffusion mode-space.
+Same Schrodinger sub-bands but classical transport along the wire,
+much cheaper than full Green's-function inversion.
+
+
+
+## 10. NEGF run result and the effective-mass single-band limit
+
+The first end-to-end NEGF run (with the `carriers=0` fix in place)
+completed all three stages without aborting:
+
+- Stage A : DD ramp converged to V_D = 0.5 V, I_D = 1.72e-14 A.
+- Stage B : NEGF self-consistent solve at V_D = 0.5 V completed,
+  Schrodinger 1DX cylindrical solver active, structure saved to
+  `gaa_iiiv_hj_tfet_negf_btbt_vd05.str`.
+- Stage C : full V_G sweep from -0.5 V to +1.0 V at 25 mV step,
+  log written to `gaa_iiiv_hj_tfet_negf_idvg.log`.
+
+But the resulting transfer curve is the numerical noise floor:
+I_D oscillates symmetrically through zero in the range +/- 3e-21 A,
+nine orders of magnitude below the verified local-Hurkx baseline
+(I_ON = 2.34 pA). There is no transistor turn-on with V_G.
+
+Three diagnostic features identify this as zero-transmission noise
+rather than a too-low but still real current:
+
+1. The current is signed (positive AND negative). Real BTBT current
+   is one-sided.
+2. There is no monotonic onset with V_G. The waveform is white noise.
+3. The magnitude tracks the round-off of the Green's function
+   inverter, not any physical scale of the device.
+
+**Why NEGF returned zero transmission.** ATLAS `NEGF_MS` builds the
+device Hamiltonian on a per-slice transverse Schrodinger basis using
+the conduction-band effective masses. There is no off-diagonal matrix
+element coupling the GaSb valence band to the InAs conduction band,
+so the retarded Green's function
+
+    G^R(E) = [E*I - H - Sigma^R(E)]^(-1)
+
+returns T(E) = Tr(Gamma_S * G^R * Gamma_D * G^A) = 0 across the
+Type-III broken-gap junction. The BTBT process - electron in the
+GaSb VB recombining into a state in the InAs CB - has no
+representation in single-band effective-mass NEGF.
+
+This is a model limitation, not a parameter-tuning problem. Raising
+`NPRED.NEGF` from 10 to 20, or `ESIZE.NEGF` from 200 to 400, or
+`EIGEN` from 8 to 16, does not introduce CB-VB coupling. Only an
+atomistic or k.p NEGF (Nemo5 / Victory Atomistic / OMEN) reproduces
+the matrix element required for broken-gap BTBT. Carrillo-Nunez et
+al. 2017 ([arXiv:1705.00909](https://arxiv.org/abs/1705.00909))
+is the standard reference for exactly this device family
+(InAs/GaSb broken-gap GAA HTFET); they used tight-binding mode-space
+NEGF with millions of atoms to match Esaki diode and HTFET
+measurements. Effective-mass NEGF, the version available in
+ATLAS 2019, is not the right tool for that physics.
+
+**Practical conclusion.** The local-Hurkx + BQP baseline
+(`simulations/gaa_iiiv_hj_tfet.in`) remains the production deck for
+this device on this license. It treats BTBT as a generation rate
+tied into the DD continuity equations, which sidesteps the
+single-band coupling problem entirely. The NEGF deck is preserved
+in the repository as documentation of the attempt and as the
+correct starting point if a Victory Atomistic / Nemo5 license
+becomes available.
+
+A short diagnostic deck `simulations/gaa_iiiv_hj_tfet_negf_diag.in`
+loads the saved structure file and writes axial and radial band-
+edge cutlines so the broken-gap alignment can be verified visually
+in tonyplot.
+
+### Final confirmation from the exported cross-section data
+
+A tonyplot cross-section export of the saved post-NEGF structure at
+V_D = 0.5 V (`gaa_iiiv_hj_tfet_negf_btbt_vd05.str`, axial cutline,
+212 sample points) was used to read the band edges directly. In the
+simulation's energy reference (Fermi level = 0 at the source), the
+key values are:
+
+| y (um)  | Material | E_V (eV) | E_C (eV) |
+|---------|----------|----------|----------|
+| 0.01024 | GaSb     | +0.0683  | +0.7943  |
+| 0.01890 | GaSb     | +0.131   | +0.858   |
+| 0.01904 | InAs     | -0.327   | +0.0272  |
+| 0.03000 | InAs     | -0.483   | -0.131   |
+
+Two broken-gap tests:
+
+  Junction overlap = E_V(GaSb, y=0.0189) - E_C(InAs, y=0.0190)
+                   = +0.131 - +0.027  = +0.104 eV
+  Bulk-to-bulk     = E_V(GaSb, y=0.010) - E_C(InAs, y=0.030)
+                   = +0.068 - (-0.131) = +0.199 eV
+
+Both are positive. The flat-band overlap expected from the
+affinities (chi(GaSb)=4.06, chi(InAs)=4.90) and bandgap (Eg(GaSb)=
+0.726) is +0.114 eV; the simulated junction value of +0.104 eV
+agrees to within 10 meV, with the extra ~85 meV in the bulk-to-bulk
+number coming from degenerate p+ source doping pulling the GaSb VB
+up and gate-induced bending pulling the InAs CB down.
+
+This closes the investigation. Three independent indicators all
+say the same thing:
+
+1. Id-Vg curve oscillates symmetrically around zero at the 10^-21 A
+   noise floor -> NEGF returned T(E) ~ 0 across the junction.
+2. The .str saved at the end of NEGF Stage B contains no carrier
+   solution and no self-consistent Poisson potential -> NEGF's
+   internal arrays were never copied into DD n/p, consistent with
+   zero transmission.
+3. The .dat cross-section export confirms the structure has the
+   expected broken-gap alignment with +104 meV overlap at the
+   junction and +199 meV bulk-to-bulk -> the structure was built
+   correctly, the physics input is correct, the missing piece is
+   purely the off-diagonal CB-VB matrix element that effective-mass
+   single-band NEGF mode-space does not have.
+
+### Recommendation
+
+Lock in `simulations/gaa_iiiv_hj_tfet.in` (local-Hurkx + BQP) as
+the production deck for this device on this license. In the
+methodology section, cite Carrillo-Nunez et al. 2017
+([arXiv:1705.00909](https://arxiv.org/abs/1705.00909)) as the
+canonical study of exactly this device family that used atomistic
+tight-binding mode-space NEGF to match Esaki diode and HTFET
+measurements -- that paper establishes that effective-mass NEGF in
+commercial TCAD is insufficient for true broken-gap BTBT, which
+gives full license to use the local-Hurkx-plus-BQP approach
+calibrated against literature.
+
+Keep `simulations/gaa_iiiv_hj_tfet_negf.in` and the diagnostic
+deck in the repository as documented record of the NEGF attempt
+and as the correct starting point if a Victory Atomistic / Nemo5
+license becomes available.
+
+If a "make NEGF produce numbers" path is still wanted, the only
+cheap option is a Type-II shift kludge: raise chi(GaSb) from 4.06
+to ~4.65 eV. That converts the simulated junction from broken-gap
+to staggered, restores a real barrier for the NEGF effective-mass
+Hamiltonian to tunnel through, and produces non-zero transmission.
+The cost is that the simulated device is no longer the real
+GaSb/InAs alignment; V_T will shift by ~50 to 100 meV from the
+true broken-gap value. Acceptable as a sensitivity / sanity
+check, not as a publication result.

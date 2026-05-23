@@ -1,0 +1,78 @@
+go atlas
+
+#-----------------------------------------------------------------------------
+# Diagnostic deck for the NEGF mode-space run - revision 4 (minimal)
+#
+# Rev 3 errored on load with:
+#     Error: No mesh lines specified in the X direction.
+# right after the standalone `mesh cylindrical` line. Diagnosis: ATLAS
+# parses `mesh cylindrical` as the start of a new mesh declaration, not
+# as a flag-toggle on the already-loaded mesh, and then demands
+# X.MESH/Y.MESH lines that never come.
+#
+# Fix: drop that line. The non-cylindrical interpretation does not
+# matter for pointwise band probes (con.band / val.band at a coordinate
+# is the same scalar in either coordinate system).
+#
+# This revision also strips every other line that could plausibly be
+# the failure source, so this deck is the smallest possible probe-and-
+# print: load, declare materials, define probes, open log, solve init,
+# close log, plot. Anything else that errored in rev 3 is no longer in
+# the deck to error.
+#
+# Things removed vs rev 3:
+#   - `mesh cylindrical`        (the actual error in rev 3)
+#   - `output con.band ...`     (loaded .str already has output settings)
+#   - `master` qualifier on log (bare `log outfile=` is universal)
+#   - `models fermi temperature=300`
+#   - `method newton`
+# (solve init takes whatever statistics the loaded structure had.)
+#-----------------------------------------------------------------------------
+
+mesh infile=gaa_iiiv_hj_tfet_negf_btbt_vd05.str
+
+material material=GaSb   permittivity=15.70 eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19
+material material=InAs   permittivity=15.15 eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18
+material material=InGaAs permittivity=13.90 eg300=0.74  affinity=4.50 nc300=2.1e17 nv300=7.7e18
+material material=HfO2   permittivity=22.0  eg300=5.7   affinity=2.05
+
+probe name=EC_GaSb       x=0.001 y=0.010 con.band
+probe name=EV_GaSb       x=0.001 y=0.010 val.band
+probe name=EV_GaSb_junc  x=0.001 y=0.019 val.band
+probe name=EC_InAs_junc  x=0.001 y=0.021 con.band
+probe name=EC_InAs       x=0.001 y=0.030 con.band
+probe name=EV_InAs       x=0.001 y=0.030 val.band
+probe name=EC_InGaAs     x=0.001 y=0.050 con.band
+
+# Open a log so probes have somewhere to write.
+log outfile=gaa_iiiv_hj_tfet_negf_diag.log
+
+# Fresh equilibrium solve at V = 0 (the loaded .str has no carrier
+# solution to continue from). Bands are determined by affinity / Eg
+# and equilibrium charge transfer, not the applied bias, so V = 0 is
+# sufficient for the alignment check.
+solve init
+
+log off
+
+# Plot the log; probe values are also visible by opening the .log
+# file in a text editor.
+tonyplot gaa_iiiv_hj_tfet_negf_diag.log
+
+#-----------------------------------------------------------------------------
+# Interpretation:
+#
+# Broken-gap is confirmed if EV_GaSb (y=0.010, deep source bulk) is
+# greater than EC_InAs (y=0.030, mid-channel bulk). The "+114 meV
+# overlap" expected from chi(GaSb)=4.06, chi(InAs)=4.90, Eg(GaSb)=0.726
+# is most directly visible in these BULK probes, not the AT-JUNCTION
+# probes (the junction probes are pinned together by the equilibrium
+# charge-transfer dipole).
+#
+# ATLAS uses an internal energy reference (typically the source
+# contact Fermi level), not vacuum, so the absolute numbers will be
+# uniformly shifted from the flat-band expectation. The relative
+# difference EV_GaSb - EC_InAs is what matters.
+#-----------------------------------------------------------------------------
+
+quit
