@@ -1,0 +1,358 @@
+#-----------------------------------------------------------------------------
+# Improved GAA III-V HTFET deck - Task 3 + Task 4 of the user prompt
+#
+# Built on top of gaa_iiiv_hj_tfet.in (the verified working baseline:
+# local-Hurkx + BQP + TAT + two-stage solve), NOT on top of v9.
+#
+# What this deck does that the baseline does not:
+#   - Sweeps gate workfunction over THREE values: 4.35, 4.65, 4.80 eV
+#     -> diagnoses whether the high V_T (1.07 V) and low I_ON (2.34 pA)
+#        of the baseline are workfunction-limited.
+#   - Sweeps V_GS from -0.5 V to +1.5 V (instead of 0 to 1.5)
+#     -> captures the full ambipolar curve, including the p-branch that
+#        is naturally dominant on a broken-gap junction at gate_wf=4.35.
+#   - Runs IdVg at TWO drain biases (V_DS = 0.05 V and 0.50 V)
+#     -> needed for DIBL extraction.
+#   - extract V_T, SS_min, I_ON, I_OFF, ratio, DIBL per workfunction.
+#   - Adds u.bbt to output for spatial BTBT generation map.
+#   - Linear AND log-y tonyplot calls.
+#
+# Implementation note: the user's prompt asked for a `loop steps=3`
+# construct. Atlas's loop interacts oddly with log-file naming and
+# variable substitution across some 2019 builds, so this deck uses three
+# explicit blocks instead. The structure is functionally identical to a
+# loop and is easier to debug if any one workfunction case fails (the
+# other two still complete and the named extracts still land).
+#-----------------------------------------------------------------------------
+go atlas
+
+# Geometry / doping (same as baseline) ---------------------------------------
+set Lg         = 0.020
+set R          = 0.005
+set tOX        = 0.002
+set tGate      = 0.002
+set Lds        = 0.020
+set doping_src = 5e19
+set doping_drn = 5e19
+set doping_ch  = 1e15
+set Ychar      = 0.003
+
+# Mesh, regions, electrodes, doping, materials, interface are issued
+# ONCE (the only thing that changes per workfunction case is the GATE
+# contact statement and the solve sequence).
+
+MESH CYLINDRICAL
+
+X.MESH loc=0.000   spacing=0.0010
+X.MESH loc=0.003   spacing=0.0005
+X.MESH loc=0.0045  spacing=0.0002
+X.MESH loc=0.005   spacing=0.0001
+X.MESH loc=0.006   spacing=0.0001
+X.MESH loc=0.007   spacing=0.0001
+X.MESH loc=0.008   spacing=0.0005
+X.MESH loc=0.009   spacing=0.0010
+
+Y.MESH loc=0.000   spacing=0.005
+Y.MESH loc=0.003   spacing=0.001
+Y.MESH loc=0.012   spacing=0.0005
+Y.MESH loc=0.0195  spacing=0.0001
+Y.MESH loc=0.020   spacing=0.0001
+Y.MESH loc=0.025   spacing=0.0010
+Y.MESH loc=0.030   spacing=0.0010
+Y.MESH loc=0.035   spacing=0.0010
+Y.MESH loc=0.0395  spacing=0.0001
+Y.MESH loc=0.040   spacing=0.0001
+Y.MESH loc=0.043   spacing=0.0005
+Y.MESH loc=0.057   spacing=0.001
+Y.MESH loc=0.060   spacing=0.005
+
+# QTY mesh extended further into GaSb on the source side.
+# Baseline had y=0.015..0.025 (5 nm into GaSb). This deck has
+# y=0.010..0.025 (10 nm into GaSb) so the WKB integral has room to
+# accumulate for low-field tail tunneling.
+QTX.MESH LOC=0.000 SPACING=0.001
+QTX.MESH LOC=0.005 SPACING=0.001
+
+QTY.MESH LOC=0.010 SPACING=0.0005
+QTY.MESH LOC=0.015 SPACING=0.0002
+QTY.MESH LOC=0.020 SPACING=0.0001
+QTY.MESH LOC=0.025 SPACING=0.0005
+
+REGION NUM=1 NAME=SRC_GaSb    MATERIAL=GaSb   Y.MIN=0.003 Y.MAX=0.020 X.MIN=0 X.MAX=0.005
+REGION NUM=2 NAME=CH_InAs     MATERIAL=InAs   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0 X.MAX=0.005
+REGION NUM=3 NAME=DRN_InGaAs  MATERIAL=InGaAs Y.MIN=0.040 Y.MAX=0.057 X.MIN=0 X.MAX=0.005
+REGION NUM=4 NAME=GATE_OX     MATERIAL=HfO2   Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.005 X.MAX=0.007
+REGION NUM=5 MATERIAL=Air Y.MIN=0.000 Y.MAX=0.020 X.MIN=0.005 X.MAX=0.009
+REGION NUM=6 MATERIAL=Air Y.MIN=0.040 Y.MAX=0.060 X.MIN=0.005 X.MAX=0.009
+
+ELECTRODE NAME=SOURCE MATERIAL=Aluminum Y.MIN=0.000 Y.MAX=0.003 X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=DRAIN  MATERIAL=Aluminum Y.MIN=0.057 Y.MAX=0.060 X.MIN=0 X.MAX=0.005
+ELECTRODE NAME=GATE   MATERIAL=Aluminum Y.MIN=0.020 Y.MAX=0.040 X.MIN=0.007 X.MAX=0.009
+
+DOPING GAUSSIAN MATERIAL=GaSb P.TYPE CONCENTRATION=$doping_src \
+  Y.MIN=0.003 Y.MAX=0.020 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
+DOPING UNIFORM  MATERIAL=InAs N.TYPE CONCENTRATION=$doping_ch \
+  Y.MIN=0.020 Y.MAX=0.040 X.MAX=0.005
+DOPING GAUSSIAN MATERIAL=InGaAs N.TYPE CONCENTRATION=$doping_drn \
+  Y.MIN=0.040 Y.MAX=0.060 X.MAX=0.005 Y.CHAR=$Ychar X.CHAR=0
+
+material material=InAs permittivity=15.15 \
+  eg300=0.354 affinity=4.90 nc300=8.7e16 nv300=6.6e18 \
+  me.tunnel=0.023 mh.tunnel=0.026 \
+  bbt.a=4.0e14 bbt.b=1.9e7 \
+  taun0=1e-9 taup0=1e-9 \
+  vsatn=4.0e7 vsatp=4.0e7
+
+material material=GaSb permittivity=15.70 \
+  eg300=0.726 affinity=4.06 nc300=2.0e17 nv300=1.3e19 \
+  me.tunnel=0.039 mh.tunnel=0.40 \
+  bbt.a=9.1e14 bbt.b=1.3e7 \
+  taun0=1e-9 taup0=1e-9 \
+  vsatn=7.0e6 vsatp=7.0e6
+
+material material=InGaAs permittivity=13.90 \
+  eg300=0.74 affinity=4.50 nc300=2.1e17 nv300=7.7e18 \
+  me.tunnel=0.041 mh.tunnel=0.050 \
+  taun0=1e-9 taup0=1e-9 \
+  vsatn=2.5e7 vsatp=2.5e7
+
+material material=HfO2 permittivity=21.0
+
+# BQP calibration (Silvaco BQP note defaults; refit to atomistic
+# reference if available).
+material material=InAs   gamma.n=1.4 alpha.n=0.3 gamma.p=1.4 alpha.p=0.3
+material material=GaSb   gamma.n=1.4 alpha.n=0.3 gamma.p=1.4 alpha.p=0.3
+material material=InGaAs gamma.n=1.4 alpha.n=0.3 gamma.p=1.4 alpha.p=0.3
+
+contact name=SOURCE
+contact name=DRAIN
+
+interface x.min=0.005 x.max=0.005 y.min=0.020 y.max=0.040 s.n=5e2 s.p=5e2
+
+# Output statement (single, includes u.bbt) ----------------------------------
+output band.temp band.param qfn qfp \
+  j.electron j.hole j.total \
+  con.band val.band \
+  e.mobility e.field \
+  u.bbt u.srh u.aug \
+  flowlines
+
+#============================================================================
+# CASE 1: gate_wf = 4.35 eV
+#============================================================================
+
+contact name=GATE workfunc=4.35
+
+# Two-stage solve: DD-only equilibrium first, then full physics ----------
+models                              \
+  fermi                             \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
+
+solve init
+
+# Turn on full TFET physics
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  bqp.n bqp.p                       \
+  fermi ni.fermi                    \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+
+solve prev
+save outfile=eq_wf435.str
+
+# IdVg at low VD = 0.05 V (DIBL reference) -----------------------------------
+solve name=DRAIN vdrain=0.0 vstep=0.01 vfinal=0.05
+log outfile=idvg_wf435_vd005.log master
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
+solve name=GATE vgate=-0.5 vstep=0.025 vfinal=1.5
+log off
+
+# IdVg at operating VD = 0.5 V (full ambipolar) ------------------------------
+solve init
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  bqp.n bqp.p                       \
+  fermi ni.fermi                    \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+
+solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
+log outfile=idvg_wf435_vd05.log master
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
+solve name=GATE vgate=-0.5 vstep=0.025 vfinal=1.5
+log off
+
+tonyplot     idvg_wf435_vd05.log
+tonyplot -st idvg_wf435_vd05.log -set log10y
+
+# Extract per-case metrics ---------------------------------------------------
+extract init infile="idvg_wf435_vd05.log"
+extract name="V_T_wf435_vd05"      xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+extract name="SS_min_wf435_mVdec"  1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+extract name="I_ON_wf435"          max(abs(i."drain"))
+extract name="I_OFF_wf435"         min(abs(i."drain"))
+extract name="ION_OFF_wf435"       $"I_ON_wf435"/$"I_OFF_wf435"
+
+extract init infile="idvg_wf435_vd005.log"
+extract name="V_T_wf435_vd005"     xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+
+extract name="DIBL_wf435_mVperV"   ($"V_T_wf435_vd005" - $"V_T_wf435_vd05") / 0.45 * 1000.0
+
+
+#============================================================================
+# CASE 2: gate_wf = 4.65 eV
+#============================================================================
+
+contact name=GATE workfunc=4.65
+
+models                              \
+  fermi                             \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
+
+solve init
+
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  bqp.n bqp.p                       \
+  fermi ni.fermi                    \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+
+solve prev
+save outfile=eq_wf465.str
+
+solve name=DRAIN vdrain=0.0 vstep=0.01 vfinal=0.05
+log outfile=idvg_wf465_vd005.log master
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
+solve name=GATE vgate=-0.5 vstep=0.025 vfinal=1.5
+log off
+
+solve init
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  bqp.n bqp.p                       \
+  fermi ni.fermi                    \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+
+solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
+log outfile=idvg_wf465_vd05.log master
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
+solve name=GATE vgate=-0.5 vstep=0.025 vfinal=1.5
+log off
+
+tonyplot     idvg_wf465_vd05.log
+tonyplot -st idvg_wf465_vd05.log -set log10y
+
+extract init infile="idvg_wf465_vd05.log"
+extract name="V_T_wf465_vd05"      xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+extract name="SS_min_wf465_mVdec"  1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+extract name="I_ON_wf465"          max(abs(i."drain"))
+extract name="I_OFF_wf465"         min(abs(i."drain"))
+extract name="ION_OFF_wf465"       $"I_ON_wf465"/$"I_OFF_wf465"
+
+extract init infile="idvg_wf465_vd005.log"
+extract name="V_T_wf465_vd005"     xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+
+extract name="DIBL_wf465_mVperV"   ($"V_T_wf465_vd005" - $"V_T_wf465_vd05") / 0.45 * 1000.0
+
+
+#============================================================================
+# CASE 3: gate_wf = 4.80 eV
+#============================================================================
+
+contact name=GATE workfunc=4.80
+
+models                              \
+  fermi                             \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
+
+solve init
+
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  bqp.n bqp.p                       \
+  fermi ni.fermi                    \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+
+solve prev
+save outfile=eq_wf480.str
+
+solve name=DRAIN vdrain=0.0 vstep=0.01 vfinal=0.05
+log outfile=idvg_wf480_vd005.log master
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
+solve name=GATE vgate=-0.5 vstep=0.025 vfinal=1.5
+log off
+
+solve init
+models                              \
+  bbt.nonlocal bbt.nlderivs         \
+  tat.nonlocal                      \
+  bqp.n bqp.p                       \
+  fermi ni.fermi                    \
+  srh auger                         \
+  fldmob                            \
+  temperature=300                   \
+  print
+method newton autonr trap maxtrap=30 itlimit=100 climit=1e-5 dvmax=0.2
+
+solve name=DRAIN vdrain=0.0 vstep=0.05 vfinal=0.5
+log outfile=idvg_wf480_vd05.log master
+solve name=GATE vgate=0.0 vstep=-0.025 vfinal=-0.5
+solve name=GATE vgate=-0.5 vstep=0.025 vfinal=1.5
+log off
+
+tonyplot     idvg_wf480_vd05.log
+tonyplot -st idvg_wf480_vd05.log -set log10y
+
+extract init infile="idvg_wf480_vd05.log"
+extract name="V_T_wf480_vd05"      xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+extract name="SS_min_wf480_mVdec"  1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+extract name="I_ON_wf480"          max(abs(i."drain"))
+extract name="I_OFF_wf480"         min(abs(i."drain"))
+extract name="ION_OFF_wf480"       $"I_ON_wf480"/$"I_OFF_wf480"
+
+extract init infile="idvg_wf480_vd005.log"
+extract name="V_T_wf480_vd005"     xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
+
+extract name="DIBL_wf480_mVperV"   ($"V_T_wf480_vd005" - $"V_T_wf480_vd05") / 0.45 * 1000.0
+
+
+# Side-by-side overlay of the three V_DS=0.5 V transfer curves --------------
+tonyplot -overlay idvg_wf435_vd05.log idvg_wf465_vd05.log idvg_wf480_vd05.log
+
+quit
