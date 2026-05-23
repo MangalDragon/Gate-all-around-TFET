@@ -137,6 +137,24 @@ output band.temp band.param qfn qfp \
   u.bbt u.srh u.aug \
   flowlines
 
+# Keyword choices in the full-physics models block:
+#   bbt.nonlocal   - non-local BTBT (essential for heterojunction TFET).
+#   bqp            - Bohm Quantum Potential, both carriers. Per Silvaco
+#                    docs, plain `bqp` is equivalent to `bqp.n bqp.p`.
+#   tat            - per the user's portability recommendation. Note:
+#                    plain `tat` is the LOCAL Klaassen-style TAT, not
+#                    the non-local one. If you want strict non-local
+#                    TAT (uses the QTX/QTY mesh), change to
+#                    `tat.nonlocal` - both keywords are valid in
+#                    Atlas 2019 but they are different physics models.
+#   bbt.nlderivs   - omitted per the user's portability recommendation.
+#                    It's a Newton-convergence aid (analytic Jacobian
+#                    of BTBT generation), not a physics model. Adding
+#                    it back if Newton struggles near threshold is safe.
+#
+# SS extracted via min(dydx(...)) instead of slope(maxslope(...)) -
+# more portable across 2019 build variants.
+
 #============================================================================
 # CASE 1: gate_wf = 4.35 eV
 #============================================================================
@@ -156,9 +174,9 @@ solve init
 
 # Turn on full TFET physics
 models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
+  bbt.nonlocal                      \
+  tat                               \
+  bqp                               \
   fermi ni.fermi                    \
   srh auger                         \
   fldmob                            \
@@ -179,9 +197,9 @@ log off
 # IdVg at operating VD = 0.5 V (full ambipolar) ------------------------------
 solve init
 models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
+  bbt.nonlocal                      \
+  tat                               \
+  bqp                               \
   fermi ni.fermi                    \
   srh auger                         \
   fldmob                            \
@@ -201,7 +219,7 @@ tonyplot -st idvg_wf435_vd05.log -set log10y
 # Extract per-case metrics ---------------------------------------------------
 extract init infile="idvg_wf435_vd05.log"
 extract name="V_T_wf435_vd05"      xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
-extract name="SS_min_wf435_mVdec"  1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+extract name="SS_min_wf435_mVdec"  min(dydx(v."gate", log10(abs(i."drain")))) * 1000.0
 extract name="I_ON_wf435"          max(abs(i."drain"))
 extract name="I_OFF_wf435"         min(abs(i."drain"))
 extract name="ION_OFF_wf435"       $"I_ON_wf435"/$"I_OFF_wf435"
@@ -229,9 +247,9 @@ method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
 solve init
 
 models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
+  bbt.nonlocal                      \
+  tat                               \
+  bqp                               \
   fermi ni.fermi                    \
   srh auger                         \
   fldmob                            \
@@ -250,9 +268,9 @@ log off
 
 solve init
 models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
+  bbt.nonlocal                      \
+  tat                               \
+  bqp                               \
   fermi ni.fermi                    \
   srh auger                         \
   fldmob                            \
@@ -271,7 +289,7 @@ tonyplot -st idvg_wf465_vd05.log -set log10y
 
 extract init infile="idvg_wf465_vd05.log"
 extract name="V_T_wf465_vd05"      xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
-extract name="SS_min_wf465_mVdec"  1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+extract name="SS_min_wf465_mVdec"  min(dydx(v."gate", log10(abs(i."drain")))) * 1000.0
 extract name="I_ON_wf465"          max(abs(i."drain"))
 extract name="I_OFF_wf465"         min(abs(i."drain"))
 extract name="ION_OFF_wf465"       $"I_ON_wf465"/$"I_OFF_wf465"
@@ -299,9 +317,9 @@ method gummel newton autonr trap maxtrap=10 itlimit=50 climit=1e-5 dvmax=0.5
 solve init
 
 models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
+  bbt.nonlocal                      \
+  tat                               \
+  bqp                               \
   fermi ni.fermi                    \
   srh auger                         \
   fldmob                            \
@@ -320,9 +338,9 @@ log off
 
 solve init
 models                              \
-  bbt.nonlocal bbt.nlderivs         \
-  tat.nonlocal                      \
-  bqp.n bqp.p                       \
+  bbt.nonlocal                      \
+  tat                               \
+  bqp                               \
   fermi ni.fermi                    \
   srh auger                         \
   fldmob                            \
@@ -341,7 +359,7 @@ tonyplot -st idvg_wf480_vd05.log -set log10y
 
 extract init infile="idvg_wf480_vd05.log"
 extract name="V_T_wf480_vd05"      xintercept(maxslope(curve(abs(v."gate"), abs(i."drain"))))
-extract name="SS_min_wf480_mVdec"  1000.0/slope(maxslope(curve(abs(v."gate"), log10(abs(i."drain")))))
+extract name="SS_min_wf480_mVdec"  min(dydx(v."gate", log10(abs(i."drain")))) * 1000.0
 extract name="I_ON_wf480"          max(abs(i."drain"))
 extract name="I_OFF_wf480"         min(abs(i."drain"))
 extract name="ION_OFF_wf480"       $"I_ON_wf480"/$"I_OFF_wf480"
